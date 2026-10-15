@@ -177,6 +177,18 @@ class TerminalBridge:
                 live_candle = provider.get_live_candle()
             except Exception:
                 live_candle = None
+            try:
+                raw_history = provider.get_candle_history(120) or []
+            except Exception:
+                raw_history = []
+            chart = []
+            for c in raw_history[-120:]:
+                try:
+                    chart.append((c.timestamp.isoformat(), float(c.open), float(c.high),
+                                  float(c.low), float(c.close), float(c.volume),
+                                  bool(c.is_closed)))
+                except (AttributeError, TypeError, ValueError):
+                    continue
             price = ticker.price if ticker else None
             if price is not None and math.isfinite(price) and price > 0:
                 history = self._history.setdefault(key, deque(maxlen=PRICE_HISTORY_MAX))
@@ -204,6 +216,8 @@ class TerminalBridge:
                 buys_5m=liquidity.buys_5m if liquidity else None,
                 sells_5m=liquidity.sells_5m if liquidity else None,
                 pool=health.get("pool"), dex=health.get("dex"),
+                market_cap_usd=liquidity.market_cap if liquidity else None,
+                fdv_usd=liquidity.fdv if liquidity else None,
                 observed_at=health.get("last_message_at"),
                 state=str(health.get("state", "DISCONNECTED")),
                 connected=bool(health.get("connected", False)),
@@ -218,7 +232,8 @@ class TerminalBridge:
                 candle_volume=live_candle.volume if live_candle else None,
                 candle_interval=live_candle.interval if live_candle else "",
                 candle_closed=live_candle.is_closed if live_candle else None,
-                price_history=tuple(self._history.get(key, ())))
+                price_history=tuple(self._history.get(key, ())),
+                chart_candles=tuple(chart))
         except asyncio.CancelledError:
             raise
         except Exception as exc:

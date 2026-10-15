@@ -154,11 +154,19 @@ watchlist over Falcon's live public market data. It observes only: no
 signals are generated, no orders exist, no wallet is ever touched.
 
 ```bash
-pip install -e ".[terminal]"   # GUI stack is optional (stdlib Tkinter)
-falcon terminal --provider binance --symbol BTCUSDT
-falcon terminal --provider solana --mint <MINT>
-# without install: python -m falcon_terminal --symbol ETHUSDT --mint <MINT>
+pip install -e ".[terminal]"   # pulls PySide6 for the QML interface
+falcon terminal --page radar --provider binance --symbol BTCUSDT
+falcon terminal --page meme --provider solana --mint <MINT>
+# fallback without extra dependencies:
+falcon terminal --ui tk
 ```
+
+Three screens: Radar/Market (watchlist, live chart, candle, metrics),
+Signal Workstation (real candle chart, honest empty signal contract) and
+Meme Coin Radar (Solana token view, unsupported columns render `—`).
+Only actually observed values are shown; scoring, alerts, 24h high/low and
+signal levels stay `—` until their backends exist. Screenshots:
+`artifacts/ui/radar_actual.png`, `signals_actual.png`, `meme_radar_actual.png`.
 
 Requires Python 3.10+ with Tkinter/Tcl-Tk and a desktop display. Windows
 Python installers include an optional Tcl/Tk component; Linux distributions

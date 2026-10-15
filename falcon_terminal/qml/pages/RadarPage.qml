@@ -1,0 +1,256 @@
+import QtQuick
+import QtQuick.Layouts
+import QtQuick.Controls
+import "../components"
+
+ColumnLayout {
+    id: root
+    spacing: FalconTheme.s16
+
+    // Header + summary cards
+    RowLayout {
+        Layout.fillWidth: true
+        spacing: FalconTheme.s16
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 2
+            Text {
+                text: "Radar / Market"
+                color: FalconTheme.textPrimary
+                font.family: FalconTheme.fontFamily
+                font.pixelSize: FalconTheme.pageTitle
+                font.bold: true
+            }
+            Text {
+                text: "Live watchlist · Real-time market data and intelligence"
+                color: FalconTheme.textSecondary
+                font.family: FalconTheme.fontFamily
+                font.pixelSize: FalconTheme.body
+            }
+        }
+        MetricCard { label: "Assets"; value: String(assets.count); Layout.preferredWidth: 110 }
+        MetricCard { label: "Active Signals"; value: "—"; Layout.preferredWidth: 130 }
+        MetricCard { label: "Exchanges"; value: exchangeCount; Layout.preferredWidth: 120 }
+        MetricCard { label: "Data age"; value: health.detail.split("  |  ")[0] || "—"; Layout.preferredWidth: 150 }
+    }
+    property string exchangeCount: {
+        assets.count; // structural dependency: recompute when rows change
+        var seen = {};
+        for (var i = 0; i < assets.rowCount(); i++) {
+            var idx = assets.index(i, 0);
+            seen[assets.data(idx, 0x104)] = true; // provider role
+        }
+        var n = Object.keys(seen).length;
+        return n > 0 ? String(n) : "—";
+    }
+
+    // Filter bar
+    RowLayout {
+        Layout.fillWidth: true
+        spacing: FalconTheme.s12
+        TextField {
+            id: search
+            Layout.preferredWidth: 240
+            placeholderText: "Search assets…"
+            color: FalconTheme.textPrimary
+            placeholderTextColor: FalconTheme.textMuted
+            font.family: FalconTheme.fontFamily
+            font.pixelSize: FalconTheme.body
+            background: Rectangle {
+                color: FalconTheme.bgInput
+                border.color: FalconTheme.borderDefault
+                radius: FalconTheme.r6
+            }
+        }
+        ComboBox {
+            id: providerBox
+            Layout.preferredWidth: 150
+            model: ["All", "Binance", "Solana"]
+            font.family: FalconTheme.fontFamily
+            font.pixelSize: FalconTheme.body
+            background: Rectangle {
+                color: FalconTheme.bgInput
+                border.color: FalconTheme.borderDefault
+                radius: FalconTheme.r6
+            }
+        }
+        ComboBox {
+            Layout.preferredWidth: 150
+            enabled: false
+            model: ["All Sectors"]
+            font.family: FalconTheme.fontFamily
+            font.pixelSize: FalconTheme.body
+            background: Rectangle {
+                color: FalconTheme.bgInput
+                border.color: FalconTheme.borderSubtle
+                radius: FalconTheme.r6
+                opacity: 0.6
+            }
+        }
+    }
+
+    // Main split
+    RowLayout {
+        Layout.fillWidth: true
+        Layout.fillHeight: true
+        Layout.preferredHeight: 480
+        spacing: FalconTheme.s16
+
+        Panel {
+            objectName: "watchlistPanel"
+            title: ""
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            ListView {
+                id: table
+                anchors.fill: parent
+                model: assets
+                clip: true
+                delegate: Rectangle {
+                    id: row
+                    property bool match: (search.text === "" || symbol.toLowerCase().indexOf(search.text.toLowerCase()) >= 0)
+                        && (providerBox.currentText === "All" || provider === providerBox.currentText)
+                    visible: match
+                    height: match ? 56 : 0
+                    width: table.width
+                    color: selected.key === key ? FalconTheme.bgSelected : (index % 2 ? FalconTheme.bgPanel : FalconTheme.bgSecondary)
+                    border.color: selected.key === key ? FalconTheme.accentGold : "transparent"
+                    border.width: 1
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: FalconTheme.s12
+                        anchors.rightMargin: FalconTheme.s12
+                        spacing: FalconTheme.s8
+                        Text { text: "☆"; color: FalconTheme.textMuted; font.pixelSize: 14; Layout.preferredWidth: 20 }
+                        ColumnLayout {
+                            Layout.preferredWidth: 130
+                            spacing: 0
+                            Text { text: symbol; color: FalconTheme.textPrimary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; font.bold: true }
+                            Text { text: provider; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.micro }
+                        }
+                        Text { text: priceText; color: FalconTheme.textPrimary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; font.bold: true; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
+                        Text { text: changeText; color: changeUp === true ? FalconTheme.positive : (changeUp === false ? FalconTheme.negative : FalconTheme.textMuted); font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; Layout.preferredWidth: 80; horizontalAlignment: Text.AlignRight }
+                        Text { text: feed; color: connected ? (stale ? FalconTheme.warning : FalconTheme.positive) : FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small; Layout.preferredWidth: 130 }
+                        Text { text: scoreText; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; Layout.preferredWidth: 60; horizontalAlignment: Text.AlignHCenter }
+                        Text { text: alertsText; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; Layout.preferredWidth: 60; horizontalAlignment: Text.AlignHCenter }
+                        Sparkline { values: spark; up: changeUp !== false; fontFamily: FalconTheme.fontFamily; Layout.preferredWidth: 110; Layout.preferredHeight: 34 }
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: selected.select(key)
+                    }
+                }
+                header: Rectangle {
+                    width: table.width; height: 30; color: "transparent"
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: FalconTheme.s12
+                        anchors.rightMargin: FalconTheme.s12
+                        spacing: FalconTheme.s8
+                        Text { Layout.preferredWidth: 20; text: "" }
+                        Text { Layout.preferredWidth: 130; text: "ASSET / PAIR"; color: FalconTheme.textMuted; font.pixelSize: FalconTheme.tableHeader; font.family: FalconTheme.fontFamily }
+                        Text { Layout.preferredWidth: 110; text: "PRICE"; color: FalconTheme.textMuted; font.pixelSize: FalconTheme.tableHeader; font.family: FalconTheme.fontFamily; horizontalAlignment: Text.AlignRight }
+                        Text { Layout.preferredWidth: 80; text: "24H CHANGE"; color: FalconTheme.textMuted; font.pixelSize: FalconTheme.tableHeader; font.family: FalconTheme.fontFamily; horizontalAlignment: Text.AlignRight }
+                        Text { Layout.preferredWidth: 130; text: "FEED"; color: FalconTheme.textMuted; font.pixelSize: FalconTheme.tableHeader; font.family: FalconTheme.fontFamily }
+                        Text { Layout.preferredWidth: 60; text: "SCORE"; color: FalconTheme.textMuted; font.pixelSize: FalconTheme.tableHeader; font.family: FalconTheme.fontFamily; horizontalAlignment: Text.AlignHCenter }
+                        Text { Layout.preferredWidth: 60; text: "ALERTS"; color: FalconTheme.textMuted; font.pixelSize: FalconTheme.tableHeader; font.family: FalconTheme.fontFamily; horizontalAlignment: Text.AlignHCenter }
+                        Text { Layout.preferredWidth: 110; text: ""; }
+                    }
+                }
+            }
+        }
+
+        // Selected asset panel
+        Panel {
+            objectName: "selectedPanel"
+            Layout.preferredWidth: ApplicationWindow.window ? ApplicationWindow.window.sidePanelWidth : 360
+            Layout.minimumWidth: 280
+            Layout.fillHeight: true
+            Layout.fillWidth: false
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: FalconTheme.s8
+                Text { text: "Selected Asset"; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small }
+                Text { text: selected.symbol; color: FalconTheme.textPrimary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.assetTitle; font.bold: true }
+                Text { text: selected.provider + " · " + selected.source; color: FalconTheme.textSecondary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small }
+                RowLayout {
+                    spacing: FalconTheme.s8
+                    Text {
+                        id: bigPrice
+                        text: selected.price
+                        color: FalconTheme.textPrimary
+                        font.family: FalconTheme.fontFamily
+                        font.pixelSize: FalconTheme.displayPrice
+                        font.bold: true
+                    }
+                    Rectangle {
+                        id: flash
+                        width: 8; height: 30; radius: 4
+                        color: "transparent"
+                        Timer {
+                            id: flashTimer; interval: 450; repeat: false
+                            onTriggered: flash.color = "transparent"
+                        }
+                        Connections {
+                            target: selected
+                            function onDirectionChanged() {
+                                if (selected.direction > 0) flash.color = FalconTheme.positive;
+                                else if (selected.direction < 0) flash.color = FalconTheme.negative;
+                                else return;
+                                flashTimer.restart();
+                            }
+                        }
+                    }
+                    Text { text: selected.quote; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body }
+                    Text { text: selected.change; visible: selected.hasChange; color: selected.changeUp ? FalconTheme.positive : FalconTheme.negative; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; font.bold: true }
+                }
+                Text { text: selected.feed; color: selected.live ? FalconTheme.positive : FalconTheme.warning; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small; font.bold: true }
+                TimePills { active: "1m"; supported: ["1m"] }
+                Text { text: "LIVE CHART"; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.micro }
+                PriceChart { id: radarChart; Layout.fillWidth: true; Layout.preferredHeight: 170; mode: "area"; fontFamily: FalconTheme.fontFamily; history: selected.history; candles: selected.candles }
+                GridLayout {
+                    columns: 3
+                    Layout.fillWidth: true
+                    columnSpacing: FalconTheme.s8
+                    rowSpacing: FalconTheme.s8
+                    MetricBlock { label: "Bid"; value: selected.bid; Layout.fillWidth: true }
+                    MetricBlock { label: "Ask"; value: selected.ask; Layout.fillWidth: true }
+                    MetricBlock { label: "Spread"; value: selected.spread; Layout.fillWidth: true }
+                    MetricBlock { label: "Liquidity"; value: selected.liquidity; Layout.fillWidth: true }
+                    MetricBlock { label: "Volume 5m"; value: selected.volume; Layout.fillWidth: true }
+                    MetricBlock { label: "24H Volume"; value: "—"; Layout.fillWidth: true }
+                    MetricBlock { label: "Buys 5m"; value: selected.buys; Layout.fillWidth: true }
+                    MetricBlock { label: "Sells 5m"; value: selected.sells; Layout.fillWidth: true }
+                    MetricBlock { label: "Market Health"; value: selected.live ? "Live" : "—"; valueColor: selected.live ? FalconTheme.positive : FalconTheme.textMuted; Layout.fillWidth: true }
+                }
+                Text { text: "CURRENT CANDLE"; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.micro }
+                Text { text: selected.candleLine; color: FalconTheme.textPrimary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small }
+                Text { text: selected.candleState; color: FalconTheme.warning; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small }
+            }
+        }
+    }
+
+    // Bottom panels
+    RowLayout {
+        Layout.fillWidth: true
+        Layout.preferredHeight: ApplicationWindow.window ? ApplicationWindow.window.bottomPanelHeight : 150
+        Layout.minimumHeight: 110
+        spacing: FalconTheme.s16
+        Panel {
+            objectName: "liveSignalsPanel"
+            title: "Live Signals"
+            linkText: ""
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            EmptyState { anchors.fill: parent; title: ""; body: "No validated signals" }
+        }
+        Panel {
+            objectName: "marketNotesPanel"
+            title: "Market Notes"
+            linkText: ""
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            EmptyState { anchors.fill: parent; title: ""; body: "Waiting for analysis engine" }
+        }
+    }
+}

@@ -21,7 +21,7 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = []
-terminal = []
+terminal = ["PySide6>=6.6"]
 
 [tool.setuptools]
 packages = [
@@ -36,3 +36,4 @@ falcon-terminal = "falcon_terminal.__main__:main"
 
 [tool.setuptools.package-data]
 "*" = ["*.md"]
+"falcon_terminal" = ["qml/*.qml", "qml/components/*.qml", "qml/pages/*.qml"]

@@ -842,6 +842,14 @@ class BinanceLiveMarketDataProvider(LiveMarketDataProvider):
             return forming
         return self._candles[-1] if self._candles else None
 
+    def get_candle_history(self, limit: int = 120) -> List[Candle]:
+        """Validated bootstrap bars plus the forming candle (flagged)."""
+        bars = list(self._candles[-max(0, limit):])
+        forming = self.forming_candle()
+        if forming is not None:
+            bars = bars + [forming]
+        return bars
+
     def get_health(self) -> Dict[str, Any]:
         self._sm.refresh_stale()
         h = self._sm.health().to_dict()

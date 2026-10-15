@@ -74,6 +74,15 @@ class LiveMarketDataProvider(ABC):
         """
         return None
 
+    def get_candle_history(self, limit: int = 120):
+        """Recent finalized candles, oldest first, for chart context.
+
+        Default: none. Providers with a real bootstrap (e.g. Binance) return
+        their own validated bars; the forming candle is flagged, never
+        presented as closed. Never synthesized.
+        """
+        return []
+
     # -- dedup / ordering ----------------------------------------------------
     def _is_duplicate(self, event_id: Optional[str]) -> bool:
         if not event_id:

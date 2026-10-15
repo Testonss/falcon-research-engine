@@ -20,6 +20,8 @@ class AssetSnapshot:
     sells_5m: Optional[int] = None
     pool: Optional[str] = None
     dex: Optional[str] = None
+    market_cap_usd: Optional[float] = None
+    fdv_usd: Optional[float] = None
     observed_at: Optional[str] = None
     state: str = "CONNECTING"
     connected: bool = False
@@ -40,6 +42,10 @@ class AssetSnapshot:
     # Bounded recent price samples (oldest first) for the sparkline.
     # Only ever contains observed prices; empty when nothing observed.
     price_history: Tuple[float, ...] = ()
+    # Chart context: recent real candles as (iso_time, o, h, l, c, v, closed).
+    # Empty when the feed offers no candle history. Forming bars are flagged
+    # and must never render as finalized history.
+    chart_candles: Tuple[tuple, ...] = ()
 
 
 @dataclass(frozen=True)

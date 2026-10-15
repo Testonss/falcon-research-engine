@@ -484,8 +484,11 @@ def cmd_terminal(args):
         argv += ["--symbol", args.symbol]
     if args.mint:
         argv += ["--mint", args.mint]
+    if args.page != "radar":
+        argv += ["--page", args.page]
     if args.poll_interval != 15.0:
         argv += ["--poll-interval", str(args.poll_interval)]
+    argv += ["--ui", args.ui]
     return terminal_main(argv)
 
 
@@ -590,6 +593,10 @@ def main(argv=None):
                    help="Binance spot symbol (default: BTCUSDT)")
     t.add_argument('--mint', default=None,
                    help="Solana token mint address (default: wrapped SOL)")
+    t.add_argument('--page', default="radar", choices=["radar", "signals", "meme"],
+                   help="initial screen (default: radar)")
+    t.add_argument('--ui', default="qml", choices=["qml", "tk"],
+                   help="presentation layer (default: qml; tk is the fallback)")
     t.add_argument('--poll-interval', type=float, default=15.0,
                    help="Solana poll seconds (default: 15)")
     t.set_defaults(fn=cmd_terminal)
