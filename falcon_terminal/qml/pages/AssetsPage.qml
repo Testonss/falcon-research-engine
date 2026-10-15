@@ -9,6 +9,13 @@ ColumnLayout {
     property bool favOnly: false
     property bool recentOnly: false
     property string mintError: ""
+    property string filterText: ""
+    Timer {
+        id: searchDebounce
+        interval: 80
+        repeat: false
+        onTriggered: root.filterText = search.text.trim().toLowerCase()
+    }
 
     // Header
     RowLayout {
@@ -56,11 +63,13 @@ ColumnLayout {
         }
         Rectangle {
             id: addBtn
+            property bool hovered: addMouse.containsMouse
+            property bool pressed: addMouse.pressed
             Layout.preferredWidth: 90
             Layout.preferredHeight: 34
             radius: FalconTheme.r6
-            color: FalconTheme.bgPanelAlt
-            border.color: FalconTheme.borderDefault
+            color: addBtn.pressed ? FalconTheme.bgSelected : (addBtn.hovered ? FalconTheme.bgHover : FalconTheme.bgPanelAlt)
+            border.color: addBtn.hovered ? FalconTheme.borderActive : FalconTheme.borderDefault
             function doAdd() {
                 if (mintField.text.trim() === "") return
                 var err = ctrl.addMint(mintField.text.trim())
@@ -80,7 +89,9 @@ ColumnLayout {
                 font.bold: true
             }
             MouseArea {
+                id: addMouse
                 anchors.fill: parent
+                hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: addBtn.doAdd()
             }
@@ -106,6 +117,7 @@ ColumnLayout {
             placeholderTextColor: FalconTheme.textMuted
             font.family: FalconTheme.fontFamily
             font.pixelSize: FalconTheme.body
+            onTextChanged: searchDebounce.restart()
             background: Rectangle {
                 color: FalconTheme.bgInput
                 border.color: FalconTheme.borderDefault
@@ -149,11 +161,14 @@ ColumnLayout {
             }
         }
         Rectangle {
+            id: favBtn
+            property bool hovered: favMouse.containsMouse
+            property bool pressed: favMouse.pressed
             Layout.preferredWidth: 44
             Layout.preferredHeight: 34
             radius: FalconTheme.r6
-            color: root.favOnly ? "#2a2118" : FalconTheme.bgInput
-            border.color: root.favOnly ? FalconTheme.accentGold : FalconTheme.borderDefault
+            color: root.favOnly ? "#2a2118" : (favBtn.pressed ? FalconTheme.bgSelected : (favBtn.hovered ? FalconTheme.bgHover : FalconTheme.bgInput))
+            border.color: root.favOnly ? FalconTheme.accentGold : (favBtn.hovered ? FalconTheme.borderActive : FalconTheme.borderDefault)
             Text {
                 anchors.centerIn: parent
                 text: "★"
@@ -161,17 +176,22 @@ ColumnLayout {
                 font.pixelSize: 16
             }
             MouseArea {
+                id: favMouse
                 anchors.fill: parent
+                hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: root.favOnly = !root.favOnly
             }
         }
         Rectangle {
+            id: recentBtn
+            property bool hovered: recentMouse.containsMouse
+            property bool pressed: recentMouse.pressed
             Layout.preferredWidth: 90
             Layout.preferredHeight: 34
             radius: FalconTheme.r6
-            color: root.recentOnly ? "#2a2118" : FalconTheme.bgInput
-            border.color: root.recentOnly ? FalconTheme.accentGold : FalconTheme.borderDefault
+            color: root.recentOnly ? "#2a2118" : (recentBtn.pressed ? FalconTheme.bgSelected : (recentBtn.hovered ? FalconTheme.bgHover : FalconTheme.bgInput))
+            border.color: root.recentOnly ? FalconTheme.accentGold : (recentBtn.hovered ? FalconTheme.borderActive : FalconTheme.borderDefault)
             Text {
                 anchors.centerIn: parent
                 text: "Recent"
@@ -181,9 +201,36 @@ ColumnLayout {
                 font.bold: root.recentOnly
             }
             MouseArea {
+                id: recentMouse
                 anchors.fill: parent
+                hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: root.recentOnly = !root.recentOnly
+            }
+        }
+        Rectangle {
+            id: resetBtn
+            property bool hovered: resetMouse.containsMouse
+            property bool pressed: resetMouse.pressed
+            Layout.preferredWidth: 70
+            Layout.preferredHeight: 34
+            radius: FalconTheme.r6
+            color: resetBtn.pressed ? FalconTheme.bgSelected : (resetBtn.hovered ? FalconTheme.bgHover : "transparent")
+            border.color: resetBtn.hovered ? FalconTheme.accentGold : FalconTheme.borderDefault
+            Text {
+                anchors.centerIn: parent
+                text: "Reset"
+                color: resetBtn.hovered ? FalconTheme.accentGold : FalconTheme.textSecondary
+                font.family: FalconTheme.fontFamily
+                font.pixelSize: FalconTheme.small
+                font.bold: resetBtn.hovered
+            }
+            MouseArea {
+                id: resetMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: { search.text = ""; root.filterText = ""; providerBox.currentIndex = 0; chainBox.currentIndex = 0; quoteBox.currentIndex = 0; root.favOnly = false; root.recentOnly = false }
             }
         }
     }
@@ -201,10 +248,7 @@ ColumnLayout {
             model: assets
             clip: true
             delegate: Rectangle {
-                property var q: search.text.trim().toLowerCase()
-                property bool match: (q === "" || symbol.toLowerCase().indexOf(q) >= 0
-                        || name.toLowerCase().indexOf(q) >= 0
-                        || mint.toLowerCase().indexOf(q) >= 0)
+                property bool match: (root.filterText === "" || searchHay.indexOf(root.filterText) >= 0)
                     && (providerBox.currentText === "All" || provider === providerBox.currentText)
                     && (chainBox.currentText === "All" || chain === chainBox.currentText
                         || (chainBox.currentText === "CEX" && chain === ""))
@@ -219,6 +263,8 @@ ColumnLayout {
                 border.width: 1
                 MouseArea {
                     anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
                     onClicked: ctrl.selectAsset(key)
                 }
                 RowLayout {
@@ -248,7 +294,7 @@ ColumnLayout {
                     }
                     Text { text: chain !== "" ? chain : "—"; color: FalconTheme.textSecondary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small; Layout.preferredWidth: 80 }
                     Text { text: quote !== "" ? quote : "—"; color: FalconTheme.textSecondary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small; Layout.preferredWidth: 70 }
-                    Text { text: priceText; color: FalconTheme.textPrimary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; font.bold: true; Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight }
+                    Text { text: priceText; color: direction > 0 ? FalconTheme.positive : (direction < 0 ? FalconTheme.negative : FalconTheme.textPrimary); font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; font.bold: true; Layout.preferredWidth: 120; horizontalAlignment: Text.AlignRight }
                     Text { text: provider; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small; Layout.preferredWidth: 90 }
                     Text { text: feed; color: connected ? (stale ? FalconTheme.warning : FalconTheme.positive) : FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small; Layout.preferredWidth: 130 }
                 }

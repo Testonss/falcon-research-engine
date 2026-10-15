@@ -74,3 +74,54 @@ def age_text(seconds: Optional[float]) -> str:
     if v < 1.0:
         return f"{v * 1000:.0f} ms"
     return f"{v:.1f}s"
+
+
+def freshness_text(age_s: Optional[float], stale: bool = False) -> str:
+    """Subtle human freshness: 'Updated now' / 'Updated 4s ago' / STALE."""
+    if stale:
+        base = age_text(age_s)
+        return f"STALE · {base}" if base != "—" else "STALE"
+    if age_s is None:
+        return "Waiting for data"
+    try:
+        v = float(age_s)
+    except (TypeError, ValueError):
+        return "Waiting for data"
+    if not math.isfinite(v) or v < 0:
+        return "Waiting for data"
+    if v < 1.5:
+        return "Updated now"
+    return f"Updated {age_text(v)} ago"
+
+
+def feed_semantics(provider: str, source: str = "") -> str:
+    """Honest streaming vs polling label. Never upgrades polling to live."""
+    p = (provider or "").strip().lower()
+    s = (source or "").strip()
+    if p == "binance":
+        return "Streaming"
+    if p == "solana":
+        # Source already carries the poll interval
+        # ("DexScreener polling (15s)"); surface it compactly.
+        if "polling" in s.lower():
+            return s
+        return "Polling"
+    return s or "—"
+
+
+def connection_state(connected: bool, stale: bool, state: str = "",
+                     error: Optional[str] = None,
+                     was_connected: bool = False) -> str:
+    """Visible connection state: CONNECTING/CONNECTED/STALE/RECONNECTING/ERROR."""
+    s = (state or "").upper()
+    if error or s == "ERROR":
+        return "RECONNECTING" if was_connected else "ERROR"
+    if not connected:
+        if s in ("CONNECTING", "DISCONNECTED", ""):
+            return "RECONNECTING" if was_connected else "CONNECTING"
+        return s or "CONNECTING"
+    if stale or s == "STALE":
+        return "STALE"
+    if s in ("CONNECTED", "STREAMING", "LIVE"):
+        return "CONNECTED"
+    return s or "CONNECTED"

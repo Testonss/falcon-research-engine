@@ -149,15 +149,26 @@ class _HistoryEntry:
 class AssetRegistry:
     """Authoritative id -> (identity, live state) map with revisions."""
 
+    # Memory bounds: leaving Falcon open for hours must not grow unbounded.
+    MAX_SEEN_IDS = 20000
+    MAX_HISTORY_ENTRIES = 600
+    MAX_HISTORY_BARS = 500
+
     def __init__(self):
         self._assets: Dict[str, CanonicalAsset] = {}
         self._states: Dict[str, AssetLiveState] = {}
         self._order: List[str] = []          # deterministic insertion order
         self._rev = 0                        # global revision clock
         self._seen_ids: Set[str] = set()     # cross-key event-id dedupe
+        self._seen_order: List[str] = []      # FIFO eviction for _seen_ids
         self._favorites: Set[str] = set()
         self._history: Dict[Tuple[str, str], _HistoryEntry] = {}
         self._dirty: Set[str] = set()        # content-changed ids awaiting publish
+        # Normalized search index: id -> "symbol name mint" (lowercased once).
+        self._search_hay: Dict[str, str] = {}
+        # Internal cache diagnostics (never shown as developer noise in UI).
+        self._hist_hits = 0
+        self._hist_misses = 0
 
     # -- identity ----------------------------------------------------------
     def register(self, asset: CanonicalAsset, *, strict: bool = True) -> bool:
@@ -174,6 +185,8 @@ class AssetRegistry:
         self._assets[asset.id] = asset
         self._states[asset.id] = AssetLiveState()
         self._order.append(asset.id)
+        self._search_hay[asset.id] = (
+            f"{asset.symbol} {asset.name} {asset.mint or ''}".lower())
         return True
 
     def enrich_identity(self, cid: str, placeholders: Tuple[str, ...] = (),
@@ -203,6 +216,9 @@ class AssetRegistry:
         if not patch:
             return False
         self._assets[cid] = dataclasses.replace(asset, **patch)
+        updated = self._assets[cid]
+        self._search_hay[cid] = (
+            f"{updated.symbol} {updated.name} {updated.mint or ''}".lower())
         return True
 
     def get(self, cid: str) -> Optional[CanonicalAsset]:
@@ -248,7 +264,7 @@ class AssetRegistry:
                 and epoch < st.last_event_time:
             return st, False  # delayed data must not roll state backward
         if event_id:
-            self._seen_ids.add(event_id)
+            self._remember_seen(event_id)
             st.last_event_id = event_id
         if epoch is not None and (st.last_event_time is None
                                   or epoch > st.last_event_time):
@@ -256,6 +272,18 @@ class AssetRegistry:
         st.event_time = event_time
         st.recv_time = _utcnow()
         return st, True
+
+    def _remember_seen(self, event_id: str) -> None:
+        """Bounded event-id dedupe (FIFO eviction keeps memory flat)."""
+        if event_id in self._seen_ids:
+            return
+        self._seen_ids.add(event_id)
+        self._seen_order.append(event_id)
+        overflow = len(self._seen_order) - self.MAX_SEEN_IDS
+        if overflow > 0:
+            for old in self._seen_order[:overflow]:
+                self._seen_ids.discard(old)
+            del self._seen_order[:overflow]
 
     def _bump(self, st: AssetLiveState, cid: str) -> None:
         self._rev += 1
@@ -430,18 +458,25 @@ class AssetRegistry:
         return out
 
     # -- search / filter -------------------------------------------------------
+    def search_hay(self, cid: str) -> str:
+        """Pre-normalized searchable string (computed once, not per render)."""
+        hit = self._search_hay.get(cid)
+        if hit is not None:
+            return hit
+        a = self._assets.get(cid)
+        if a is None:
+            return ""
+        hay = f"{a.symbol} {a.name} {a.mint or ''}".lower()
+        self._search_hay[cid] = hay
+        return hay
+
     def search(self, query: str) -> List[str]:
         """Substring match over symbol, name and mint (case-insensitive)."""
         q = (query or "").strip().lower()
         if not q:
             return list(self._order)
-        out = []
-        for cid in self._order:
-            a = self._assets[cid]
-            hay = f"{a.symbol} {a.name} {a.mint or ''}".lower()
-            if q in hay:
-                out.append(cid)
-        return out
+        return [cid for cid in self._order
+                if q in self.search_hay(cid)]
 
     def filter(self, *, provider: str = "", chain: str = "",
                quote: str = "", favorites_only: bool = False) -> List[str]:
@@ -503,8 +538,14 @@ class AssetRegistry:
     # -- history cache -----------------------------------------------------------
     def history_put(self, cid: str, timeframe: str,
                     bars: Tuple[tuple, ...]) -> None:
+        bounded = tuple(bars[-self.MAX_HISTORY_BARS:])
         self._history[(cid, timeframe)] = _HistoryEntry(
-            bars=tuple(bars), fetched_at=time.monotonic(), complete=True)
+            bars=bounded, fetched_at=time.monotonic(), complete=True)
+        if len(self._history) > self.MAX_HISTORY_ENTRIES:
+            # Evict the stalest entry (oldest fetch) to stay bounded.
+            oldest = min(self._history,
+                         key=lambda k: self._history[k].fetched_at)
+            self._history.pop(oldest, None)
 
     def history_get(self, cid: str, timeframe: str) -> Tuple[tuple, ...]:
         entry = self._history.get((cid, timeframe))
@@ -513,8 +554,46 @@ class AssetRegistry:
     def history_fresh(self, cid: str, timeframe: str, ttl_s: float) -> bool:
         entry = self._history.get((cid, timeframe))
         if not entry or not entry.bars:
+            self._hist_misses += 1
             return False
         try:
-            return (time.monotonic() - entry.fetched_at) < float(ttl_s)
+            fresh = (time.monotonic() - entry.fetched_at) < float(ttl_s)
         except (TypeError, ValueError):
+            self._hist_misses += 1
             return False
+        if fresh:
+            self._hist_hits += 1
+        else:
+            self._hist_misses += 1
+        return fresh
+
+    def history_age_s(self, cid: str, timeframe: str) -> Optional[float]:
+        """Seconds since the cached bars were fetched (None when empty)."""
+        entry = self._history.get((cid, timeframe))
+        if not entry or not entry.bars:
+            return None
+        return max(0.0, time.monotonic() - entry.fetched_at)
+
+    def history_stats(self) -> Dict[str, int]:
+        """Internal cache diagnostics: hits/misses/entries (not UI noise)."""
+        return {"hits": self._hist_hits, "misses": self._hist_misses,
+                "entries": len(self._history)}
+
+    def priority_order(self, selected: str = "",
+                       recent: Tuple[str, ...] = ()) -> List[str]:
+        """Startup/refresh priority: selected, favorites, recent, rest."""
+        favs = set(self._favorites)
+        recent_set = set(recent or ())
+        ranked = []
+        for cid in self._order:
+            if cid == selected:
+                rank = 0
+            elif cid in favs:
+                rank = 1
+            elif cid in recent_set:
+                rank = 2
+            else:
+                rank = 3
+            ranked.append((rank, cid))
+        ranked.sort(key=lambda t: (t[0], self._order.index(t[1])))
+        return [cid for _, cid in ranked]

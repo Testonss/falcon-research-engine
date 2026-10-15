@@ -15,11 +15,13 @@ ColumnLayout {
             Rectangle {
                 property bool isActive: modelData === root.active
                 property bool ok: root.supported.indexOf(modelData) >= 0
+                property bool hovered: pillMouse.containsMouse
+                property bool pressed: pillMouse.pressed
                 Layout.preferredWidth: 40
                 Layout.preferredHeight: 26
                 radius: FalconTheme.r4
-                color: isActive ? FalconTheme.accentGold : FalconTheme.bgPanelAlt
-                border.color: isActive ? FalconTheme.accentGold : FalconTheme.borderDefault
+                color: isActive ? FalconTheme.accentGold : (pressed && ok ? FalconTheme.bgSelected : (hovered && ok ? FalconTheme.bgHover : FalconTheme.bgPanelAlt))
+                border.color: isActive ? FalconTheme.accentGold : (hovered && ok ? FalconTheme.borderActive : FalconTheme.borderDefault)
                 opacity: ok ? 1.0 : 0.45
                 Text {
                     anchors.centerIn: parent
@@ -30,9 +32,11 @@ ColumnLayout {
                     font.bold: isActive
                 }
                 MouseArea {
+                    id: pillMouse
                     anchors.fill: parent
+                    hoverEnabled: true
                     enabled: parent.ok
-                    cursorShape: parent.ok ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                    cursorShape: parent.ok ? Qt.PointingHandCursor : Qt.ArrowCursor
                     onClicked: root.pick(modelData)
                 }
             }

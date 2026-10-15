@@ -71,14 +71,16 @@ ApplicationWindow {
                     model: root.navItems
                     Rectangle {
                         property bool active: modelData.id === nav.page
+                        property bool hovered: navMouse.containsMouse
+                        property bool pressed: navMouse.pressed
                         Layout.fillWidth: true
                         Layout.minimumWidth: root.navItemWidth
                         Layout.preferredWidth: root.navItemWidth
                         Layout.maximumWidth: root.navItemWidth
                         Layout.preferredHeight: 38
                         radius: FalconTheme.r6
-                        color: active ? "#2a2118" : "transparent"
-                        border.color: active ? FalconTheme.accentGold : "transparent"
+                        color: active ? "#2a2118" : (pressed ? FalconTheme.bgSelected : (hovered ? FalconTheme.bgHover : "transparent"))
+                        border.color: active ? FalconTheme.accentGold : (hovered ? FalconTheme.borderActive : "transparent")
                         border.width: 1
                         opacity: (modelData.id === "radar" || modelData.id === "signals" || modelData.id === "meme" || modelData.id === "assets") ? 1.0 : 0.55
                         Text {
@@ -92,7 +94,10 @@ ApplicationWindow {
                             font.bold: active
                         }
                         MouseArea {
+                            id: navMouse
                             anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
                             onClicked: nav.go(modelData.id)
                         }
                     }
@@ -135,8 +140,8 @@ ApplicationWindow {
                     Text { text: "FALCON TERMINAL"; color: FalconTheme.accentGold; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.panelTitle; font.bold: true }
                     Text { text: root.pageTitle; color: FalconTheme.textSecondary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body }
                     Item { Layout.fillWidth: true }
-                    Rectangle { width: 8; height: 8; radius: 4; color: health.connected ? (health.stale ? FalconTheme.warning : FalconTheme.positive) : FalconTheme.negative }
-                    Text { text: health.connected ? (health.stale ? "Stale" : "Connected") : "Offline"; color: FalconTheme.textSecondary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small }
+                    Rectangle { width: 8; height: 8; radius: 4; color: health.state === "CONNECTED" ? FalconTheme.positive : (health.state === "STALE" ? FalconTheme.warning : (health.state === "RECONNECTING" ? FalconTheme.warning : (health.state === "ERROR" ? FalconTheme.negative : FalconTheme.textMuted))) }
+                    Text { text: health.state === "CONNECTED" ? "Connected" : (health.state === "STALE" ? "Stale" : (health.state === "RECONNECTING" ? "Reconnecting" : (health.state === "ERROR" ? "Error" : "Connecting"))); color: FalconTheme.textSecondary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small }
                     Text { text: health.detail; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small }
                     Text { text: clock.now; color: FalconTheme.textSecondary; font.family: "Consolas"; font.pixelSize: FalconTheme.small }
                 }

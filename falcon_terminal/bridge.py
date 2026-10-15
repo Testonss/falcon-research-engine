@@ -54,6 +54,17 @@ FINER_THAN = {
     "4h": ("1m", "5m", "15m", "1h"),
     "1D": ("1m", "5m", "15m", "1h", "4h"),
 }
+# Bounded background prefetch of neighboring timeframes once the active
+# view is fresh. Adjacent intervals only (max 2), never the full matrix.
+NEIGHBOR_TF = {
+    "1m": ("5m", "15m"),
+    "5m": ("1m", "15m"),
+    "15m": ("5m", "1h"),
+    "1h": ("15m", "4h"),
+    "4h": ("1h", "1D"),
+    "1D": ("4h", "1h"),
+}
+MAX_PREFETCH = 2
 CATALOG_REFRESH_S = 3600.0
 
 
@@ -269,6 +280,8 @@ class TerminalBridge:
 
     # -- snapshots ---------------------------------------------------------------
     def _publish(self, stopping: bool = False) -> None:
+        from falcon_terminal import perf as _perf
+        t0 = _perf.now()
         self._sequence += 1
         rows = tuple(self._row_snapshot(cid) for cid in self._registry.ids())
         changed = tuple(self._registry.drain_dirty())
@@ -280,6 +293,10 @@ class TerminalBridge:
         except queue.Empty:
             pass
         self._events.put_nowait(message)
+        # Coalesced latest-state publish: queue depth stays 1, UI polls at
+        # 10 Hz, backend ingestion is never throttled by rendering.
+        _perf.global_tracker.measure("registry_to_ui", t0,
+                                     f"{len(rows)} rows/{len(changed)} changed")
 
     def _row_snapshot(self, cid: str) -> AssetSnapshot:
         asset = self._registry.get(cid)
@@ -534,6 +551,8 @@ class TerminalBridge:
                     placeholders=(key,))
 
     async def _collect(self, key: str, provider: LiveMarketDataProvider) -> None:
+        from falcon_terminal import perf as _perf
+        t0 = _perf.now()
         try:
             health = provider.get_health()
             ticker = await provider.get_ticker()
@@ -611,6 +630,8 @@ class TerminalBridge:
                 key, state="ERROR", connected=False,
                 stale=st.price is not None if st else False,
                 error=str(exc))
+        finally:
+            _perf.global_tracker.measure("provider_to_registry", t0, key)
 
     # -- timeframe service ---------------------------------------------------------------
     def _seed_live_bar(self, key: str, candle) -> None:
@@ -768,9 +789,54 @@ class TerminalBridge:
         finally:
             self._chart_loading.discard((cid, tf))
 
+    async def _prefetch_neighbors(self) -> None:
+        """Warm likely neighboring timeframes for the selected asset.
+
+        Bounded: adjacent intervals only (max MAX_PREFETCH), only when the
+        active view is already fresh, never all history blindly. Favorites
+        and recent assets are prioritized for the active timeframe when the
+        worker is otherwise idle.
+        """
+        cid, tf = self._selected_id, self._active_tf
+        if not cid:
+            return
+        asset = self._registry.get(cid)
+        if asset is None or asset.provider != "binance":
+            return
+        if not self._registry.history_fresh(cid, tf, TF_TTL.get(tf, 60.0)):
+            return  # active view first; neighbors only after it loads
+        for neighbor in NEIGHBOR_TF.get(tf, ())[:MAX_PREFETCH]:
+            if (cid, neighbor) in self._hist_tasks:
+                continue
+            if self._registry.history_fresh(
+                    cid, neighbor, TF_TTL.get(neighbor, 60.0)):
+                continue
+            if neighbor not in (asset.supported or ()):
+                continue
+            task = asyncio.ensure_future(self._fetch_history(cid, neighbor))
+            self._hist_tasks[(cid, neighbor)] = task
+            task.add_done_callback(
+                lambda t, k=(cid, neighbor): self._hist_tasks.pop(k, None))
+            break  # one neighbor per loop iteration: bounded network load
+
     # -- universe (catalog + all-tickers poll) -------------------------------------------------
     async def _universe_once(self) -> None:
-        """One-shot catalog bootstrap (public, bounded, never fatal)."""
+        """One-shot catalog bootstrap (public, bounded, never fatal).
+
+        Uses the local metadata cache instantly when valid, then refreshes
+        in the background. Prices are never served from cache (metadata
+        only); live quotes arrive via the ticker poll.
+        """
+        try:
+            from falcon_terminal import catalog_cache
+            cached, fresh = catalog_cache.load()
+            if cached and fresh:
+                for a in cached:
+                    self._registry.register(a)
+                logger.info("universe catalog: %d rows from local cache",
+                            len(cached))
+        except Exception as e:
+            logger.debug("catalog cache ignored: %s", e)
         try:
             assets, stats = await self._catalog_fetcher()
             for a in assets:
@@ -778,8 +844,18 @@ class TerminalBridge:
             self._catalog_at = time.monotonic()
             logger.info("universe catalog: %d kept, %d skipped",
                         stats.get("kept", 0), stats.get("skipped", 0))
+            try:
+                from falcon_terminal import catalog_cache as _cc
+                _cc.save(assets)
+            except Exception as e:
+                logger.debug("catalog cache save skipped: %s", e)
         except Exception as e:
-            logger.warning("universe catalog unavailable: %s", e)
+            if not self._registry.ids():
+                # No cache and no network: surface honestly, never fake.
+                logger.warning("universe catalog unavailable: %s", e)
+            else:
+                logger.warning("universe catalog refresh failed "
+                               "(serving cached metadata): %s", e)
 
     async def _universe_tick(self) -> None:
         """All-symbols quote refresh + hourly catalog refresh."""
@@ -851,27 +927,6 @@ class TerminalBridge:
                 continue
             self._track_connect(solana_mint_id(mint))
 
-    async def _maybe_tail_refresh(self) -> None:
-        """Refresh the active view's tail (live forming bar) when due."""
-        cid, tf = self._selected_id, self._active_tf
-        if not cid:
-            return
-        asset = self._registry.get(cid)
-        if asset is None or tf not in (asset.supported or ()):
-            return
-        if not self._registry.history_get(cid, tf):
-            return  # initial fetch owned by _ensure_active_view
-        now = time.monotonic()
-        if now - self._last_tail.get((cid, tf), 0.0) < TAIL_REFRESH_S:
-            return
-        if (cid, tf) in self._hist_tasks:
-            return
-        self._last_tail[(cid, tf)] = now
-        task = asyncio.ensure_future(self._tail_fetch(cid, tf))
-        self._hist_tasks[(cid, tf)] = task
-        task.add_done_callback(
-            lambda t, k=(cid, tf): self._hist_tasks.pop(k, None))
-
     async def _maybe_retarget_full_provider(self) -> None:
         """Retarget the full-fidelity Binance provider to the selected symbol."""
         if not self._universe or self._injected is not None:
@@ -907,6 +962,15 @@ class TerminalBridge:
             self._registry.apply_health(
                 cid, state="ERROR", connected=False, error=str(e))
 
+    def _prioritized_providers(self) -> List[Tuple[str, object]]:
+        """Collect order: selected, favorites, then the rest (stable)."""
+        items = self._snapshot_providers()
+        favs = self._registry._favorites
+        sel = self._selected_id
+        items.sort(key=lambda kv: (0 if kv[0] == sel else
+                                   1 if kv[0] in favs else 2, kv[0]))
+        return items
+
     async def _run(self) -> None:
         with self._guard:
             self._loop = asyncio.get_running_loop()
@@ -915,7 +979,7 @@ class TerminalBridge:
                 self._async_stop.set()
         self._make_providers()
         self._publish()
-        for key, provider in self._snapshot_providers():
+        for key, provider in self._prioritized_providers():
             self._spawn_connect(key, provider)
         uni_task: Optional[asyncio.Task] = None
         try:
@@ -927,9 +991,10 @@ class TerminalBridge:
                 await self._maybe_retarget_full_provider()
                 await asyncio.gather(*(self._collect(key, provider)
                                        for key, provider in
-                                       self._snapshot_providers()))
+                                       self._prioritized_providers()))
                 await self._ensure_active_view()
                 await self._maybe_tail_refresh()
+                await self._prefetch_neighbors()
                 self._publish()
                 try:
                     await asyncio.wait_for(

@@ -29,12 +29,15 @@ ColumnLayout {
         }
         Badge { text: "PRESETS — SOON"; fg: FalconTheme.textMuted; opacity: 0.7 }
         Rectangle {
+            id: resetBtn
+            property bool hovered: resetMouse.containsMouse
+            property bool pressed: resetMouse.pressed
             Layout.preferredWidth: 90; Layout.preferredHeight: 30
             radius: FalconTheme.r6
-            color: "transparent"
-            border.color: FalconTheme.accentGold
+            color: resetBtn.pressed ? FalconTheme.bgSelected : (resetBtn.hovered ? FalconTheme.bgHover : "transparent")
+            border.color: resetBtn.hovered ? FalconTheme.accentGold : FalconTheme.accentGold
             Text { anchors.centerIn: parent; text: "Reset"; color: FalconTheme.accentGold; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small; font.bold: true }
-            MouseArea { anchors.fill: parent; onClicked: { venueBox.currentIndex = 0; chainBox.currentIndex = 0; } }
+            MouseArea { id: resetMouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: { venueBox.currentIndex = 0; chainBox.currentIndex = 0; } }
         }
     }
 
@@ -134,7 +137,9 @@ ColumnLayout {
                     border.width: 1
                     MouseArea {
                         anchors.fill: parent
-                        onClicked: selected.select(key)
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: ctrl.selectAsset(key)
                     }
                     RowLayout {
                         anchors.fill: parent
@@ -157,7 +162,7 @@ ColumnLayout {
                         }
                         Text { text: symbol; color: FalconTheme.textPrimary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; font.bold: true; Layout.preferredWidth: 90 }
                         Text { text: "SOL"; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small; Layout.preferredWidth: 40 }
-                        Text { text: priceText; color: FalconTheme.textPrimary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
+                        Text { text: priceText; color: direction > 0 ? FalconTheme.positive : (direction < 0 ? FalconTheme.negative : FalconTheme.textPrimary); font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
                         Text { text: "—"; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; Layout.preferredWidth: 60; horizontalAlignment: Text.AlignRight }
                         Text { text: "—"; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; Layout.preferredWidth: 60; horizontalAlignment: Text.AlignRight }
                         Text { text: feed; color: connected ? FalconTheme.positive : FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small; Layout.preferredWidth: 120 }
@@ -211,6 +216,7 @@ ColumnLayout {
                 Text { text: selected.symbol; color: FalconTheme.textPrimary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.assetTitle; font.bold: true }
                 Text { text: selected.key; color: FalconTheme.textMuted; font.family: "Consolas"; font.pixelSize: FalconTheme.micro }
                 Text { text: selected.price; color: FalconTheme.textPrimary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.displayPrice; font.bold: true }
+                Text { text: selected.freshness + " · " + selected.semantics; color: selected.isStale ? FalconTheme.warning : FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small }
                 Sparkline { values: selected.history; up: true; fontFamily: FalconTheme.fontFamily; Layout.fillWidth: true; Layout.preferredHeight: 90 }
                 GridLayout {
                     columns: 3

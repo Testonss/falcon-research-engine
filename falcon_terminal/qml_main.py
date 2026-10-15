@@ -118,6 +118,10 @@ def main(argv=None) -> int:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     logging.basicConfig(level=logging.WARNING, format="%(name)s: %(message)s")
 
+    from falcon_terminal import perf as _perf
+    t_app = _perf.now()
+    _perf.global_tracker.mark("app_start")
+
     app = QGuiApplication(sys.argv[:1])
     engine = QQmlApplicationEngine()
     try:
@@ -154,6 +158,8 @@ def main(argv=None) -> int:
         return 1
     if errors:
         logger.warning("QML warnings:\n%s", "\n".join(errors[:20]))
+    _perf.global_tracker.measure("startup_first_frame", t_app,
+                                 "QML loaded")
     window = engine.rootObjects()[0]
     try:
         window.setProperty("width", win_w)

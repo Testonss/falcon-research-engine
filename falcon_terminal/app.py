@@ -109,6 +109,9 @@ class TerminalApp:
         root.protocol("WM_DELETE_WINDOW", self.close)
         self._build()
         # Paint the shell before starting provider bootstrap.
+        from falcon_terminal import perf as _perf
+        self._t_app = _perf.now()
+        _perf.global_tracker.mark("app_start")
         self._startup = root.after_idle(self._start)
 
     def _label(self, parent, text="", *, size=10, color=TEXT, bold=False,
@@ -244,6 +247,9 @@ class TerminalApp:
         self._startup = None
         if self.closing:
             return
+        from falcon_terminal import perf as _perf
+        _perf.global_tracker.measure("startup_first_frame", self._t_app,
+                                     "Tk shell painted")
         self.bridge.start()
         self._tick()
 

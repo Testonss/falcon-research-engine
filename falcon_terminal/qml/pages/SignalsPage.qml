@@ -62,6 +62,7 @@ ColumnLayout {
                         onPick: function(tf) { ctrl.setTimeframe(tf) }
                     }
                     Item { Layout.fillWidth: true }
+                    Text { text: selected.freshness; color: selected.isStale ? FalconTheme.warning : FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small }
                     Text { text: selected.candleState; color: FalconTheme.warning; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small }
                 }
                 Text {
@@ -78,6 +79,7 @@ ColumnLayout {
                     fontFamily: FalconTheme.fontFamily
                     history: selected.history
                     candles: selected.candles
+                    opacity: selected.chartLoading ? 0.45 : 1.0
                 }
                 Text {
                     text: selected.candleLine
@@ -124,11 +126,14 @@ ColumnLayout {
                     Layout.fillWidth: true
                     spacing: FalconTheme.s8
                     Rectangle {
+                        id: watchBtn
+                        property bool hovered: watchMouse.containsMouse
+                        property bool pressed: watchMouse.pressed
                         Layout.preferredWidth: 110
                         Layout.preferredHeight: 30
                         radius: FalconTheme.r6
-                        color: ctrl.watchedKeys.indexOf(selected.key) >= 0 ? "#2a2118" : "transparent"
-                        border.color: ctrl.watchedKeys.indexOf(selected.key) >= 0 ? FalconTheme.accentGold : FalconTheme.borderDefault
+                        color: ctrl.watchedKeys.indexOf(selected.key) >= 0 ? "#2a2118" : (watchBtn.pressed ? FalconTheme.bgSelected : (watchBtn.hovered ? FalconTheme.bgHover : "transparent"))
+                        border.color: ctrl.watchedKeys.indexOf(selected.key) >= 0 ? FalconTheme.accentGold : (watchBtn.hovered ? FalconTheme.borderActive : FalconTheme.borderDefault)
                         Text {
                             anchors.centerIn: parent
                             text: ctrl.watchedKeys.indexOf(selected.key) >= 0 ? "WATCHING ✓" : "WATCH"
@@ -138,7 +143,9 @@ ColumnLayout {
                             font.bold: true
                         }
                         MouseArea {
+                            id: watchMouse
                             anchors.fill: parent
+                            hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
                             onClicked: ctrl.toggleWatch(selected.key)
                         }

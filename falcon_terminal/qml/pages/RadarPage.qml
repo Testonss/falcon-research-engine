@@ -30,22 +30,21 @@ ColumnLayout {
         }
         MetricCard { label: "Assets"; value: String(assets.count); Layout.preferredWidth: 110 }
         MetricCard { label: "Active Signals"; value: "—"; Layout.preferredWidth: 130 }
-        MetricCard { label: "Exchanges"; value: exchangeCount; Layout.preferredWidth: 120 }
+        MetricCard { label: "Exchanges"; value: ctrl.assetProviders.length > 0 ? String(ctrl.assetProviders.length) : "—"; Layout.preferredWidth: 120 }
         MetricCard { label: "Data age"; value: health.detail.split("  |  ")[0] || "—"; Layout.preferredWidth: 150 }
     }
-    property string exchangeCount: {
-        assets.count; // structural dependency: recompute when rows change
-        var seen = {};
-        for (var i = 0; i < assets.rowCount(); i++) {
-            var idx = assets.index(i, 0);
-            seen[assets.data(idx, 0x104)] = true; // provider role
-        }
-        var n = Object.keys(seen).length;
-        return n > 0 ? String(n) : "—";
-    }
 
-    // Filter bar
+    // Filter bar (local registry/view operation: no provider refetch)
     property bool favOnly: false
+    property string filterText: ""
+    // Lowercased once per selection change, not once per row per tick.
+    property string providerFilter: providerBox.currentText === "All" ? "" : providerBox.currentText.toLowerCase()
+    Timer {
+        id: searchDebounce
+        interval: 80
+        repeat: false
+        onTriggered: root.filterText = search.text.trim().toLowerCase()
+    }
     RowLayout {
         Layout.fillWidth: true
         spacing: FalconTheme.s12
@@ -57,6 +56,7 @@ ColumnLayout {
             placeholderTextColor: FalconTheme.textMuted
             font.family: FalconTheme.fontFamily
             font.pixelSize: FalconTheme.body
+            onTextChanged: searchDebounce.restart()
             background: Rectangle {
                 color: FalconTheme.bgInput
                 border.color: FalconTheme.borderDefault
@@ -90,11 +90,13 @@ ColumnLayout {
         }
         Rectangle {
             id: favToggle
+            property bool hovered: favMouse.containsMouse
+            property bool pressed: favMouse.pressed
             Layout.preferredWidth: 44
             Layout.preferredHeight: 34
             radius: FalconTheme.r6
-            color: root.favOnly ? "#2a2118" : FalconTheme.bgInput
-            border.color: root.favOnly ? FalconTheme.accentGold : FalconTheme.borderDefault
+            color: root.favOnly ? "#2a2118" : (favToggle.pressed ? FalconTheme.bgSelected : (favToggle.hovered ? FalconTheme.bgHover : FalconTheme.bgInput))
+            border.color: root.favOnly ? FalconTheme.accentGold : (favToggle.hovered ? FalconTheme.borderActive : FalconTheme.borderDefault)
             Text {
                 anchors.centerIn: parent
                 text: "★"
@@ -102,9 +104,36 @@ ColumnLayout {
                 font.pixelSize: 16
             }
             MouseArea {
+                id: favMouse
                 anchors.fill: parent
+                hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: root.favOnly = !root.favOnly
+            }
+        }
+        Rectangle {
+            id: resetBtn
+            property bool hovered: resetMouse.containsMouse
+            property bool pressed: resetMouse.pressed
+            Layout.preferredWidth: 70
+            Layout.preferredHeight: 34
+            radius: FalconTheme.r6
+            color: resetBtn.pressed ? FalconTheme.bgSelected : (resetBtn.hovered ? FalconTheme.bgHover : "transparent")
+            border.color: resetBtn.hovered ? FalconTheme.accentGold : FalconTheme.borderDefault
+            Text {
+                anchors.centerIn: parent
+                text: "Reset"
+                color: resetBtn.hovered ? FalconTheme.accentGold : FalconTheme.textSecondary
+                font.family: FalconTheme.fontFamily
+                font.pixelSize: FalconTheme.small
+                font.bold: resetBtn.hovered
+            }
+            MouseArea {
+                id: resetMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: { search.text = ""; root.filterText = ""; providerBox.currentIndex = 0; root.favOnly = false }
             }
         }
     }
@@ -128,10 +157,10 @@ ColumnLayout {
                 clip: true
                 delegate: Rectangle {
                     id: row
-                    property bool match: (search.text === "" || symbol.toLowerCase().indexOf(search.text.toLowerCase()) >= 0
-                            || name.toLowerCase().indexOf(search.text.toLowerCase()) >= 0
-                            || mint.toLowerCase().indexOf(search.text.toLowerCase()) >= 0)
-                        && (providerBox.currentText === "All" || provider === providerBox.currentText.toLowerCase())
+                    // Pre-normalized searchHay (Python) + debounced filterText:
+                    // single indexOf per row, no per-tick toLowerCase storm.
+                    property bool match: (root.filterText === "" || searchHay.indexOf(root.filterText) >= 0)
+                        && (root.providerFilter === "" || provider === root.providerFilter)
                         && (!root.favOnly || favorite)
                     visible: match
                     height: match ? 56 : 0
@@ -141,7 +170,9 @@ ColumnLayout {
                     border.width: 1
                     MouseArea {
                         anchors.fill: parent
-                        onClicked: selected.select(key)
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: ctrl.selectAsset(key)
                     }
                     RowLayout {
                         anchors.fill: parent
@@ -168,7 +199,7 @@ ColumnLayout {
                             Text { text: symbol; color: FalconTheme.textPrimary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; font.bold: true }
                             Text { text: provider; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.micro }
                         }
-                        Text { text: priceText; color: FalconTheme.textPrimary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; font.bold: true; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
+                        Text { text: priceText; color: direction > 0 ? FalconTheme.positive : (direction < 0 ? FalconTheme.negative : FalconTheme.textPrimary); font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; font.bold: true; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
                         Text { text: changeText; color: changeUp === true ? FalconTheme.positive : (changeUp === false ? FalconTheme.negative : FalconTheme.textMuted); font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; Layout.preferredWidth: 80; horizontalAlignment: Text.AlignRight }
                         Text { text: feed; color: connected ? (stale ? FalconTheme.warning : FalconTheme.positive) : FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small; Layout.preferredWidth: 130 }
                         Text { text: scoreText; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; Layout.preferredWidth: 60; horizontalAlignment: Text.AlignHCenter }
@@ -241,6 +272,7 @@ ColumnLayout {
                     Text { text: selected.change; visible: selected.hasChange; color: selected.changeUp ? FalconTheme.positive : FalconTheme.negative; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; font.bold: true }
                 }
                 Text { text: selected.feed; color: selected.live ? FalconTheme.positive : FalconTheme.warning; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small; font.bold: true }
+                Text { text: selected.freshness + " · " + selected.semantics; color: selected.isStale ? FalconTheme.warning : FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small }
                 TimePills {
                     active: selected.timeframe
                     supported: selected.supportedTimeframes
@@ -254,7 +286,7 @@ ColumnLayout {
                     font.family: FalconTheme.fontFamily
                     font.pixelSize: FalconTheme.small
                 }
-                PriceChart { id: radarChart; Layout.fillWidth: true; Layout.preferredHeight: 170; mode: "area"; fontFamily: FalconTheme.fontFamily; history: selected.history; candles: selected.candles }
+                PriceChart { id: radarChart; Layout.fillWidth: true; Layout.preferredHeight: 170; mode: "area"; fontFamily: FalconTheme.fontFamily; history: selected.history; candles: selected.candles; opacity: selected.chartLoading ? 0.45 : 1.0 }
                 GridLayout {
                     columns: 3
                     Layout.fillWidth: true

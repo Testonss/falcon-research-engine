@@ -69,6 +69,3 @@ class TerminalSnapshot:
     # Ids whose content changed since the previous published snapshot.
     # Lets consumers touch only moved rows instead of rebuilding tables.
     changed: Tuple[str, ...] = ()
-    # Ids whose state changed since the previous published snapshot.
-    # Lets consumers touch only moved rows instead of rebuilding tables.
-    changed: Tuple[str, ...] = ()

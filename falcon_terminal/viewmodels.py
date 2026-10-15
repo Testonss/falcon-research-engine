@@ -34,10 +34,21 @@ def _feed_text(asset: AssetSnapshot) -> str:
     return asset.state
 
 
-def _row_dict(asset: AssetSnapshot) -> dict:
+def _row_dict(asset: AssetSnapshot, prev_price: Optional[float] = None) -> dict:
     up = None
     if asset.change_pct_24h is not None:
         up = asset.change_pct_24h >= 0
+    # Tick direction vs the previously rendered price (None-safe):
+    # 1 = uptick, -1 = downtick, 0 = unchanged/unknown (never flashes).
+    direction = 0
+    if asset.price is not None and prev_price is not None:
+        try:
+            if float(asset.price) > float(prev_price):
+                direction = 1
+            elif float(asset.price) < float(prev_price):
+                direction = -1
+        except (TypeError, ValueError):
+            direction = 0
     return {
         "key": asset.key,
         "symbol": asset.symbol,
@@ -51,6 +62,7 @@ def _row_dict(asset: AssetSnapshot) -> dict:
         "priceText": fmt.number(asset.price),
         "changeText": fmt.change_text(asset.change_pct_24h),
         "changeUp": up,
+        "direction": direction,
         "feed": _feed_text(asset),
         "connected": asset.connected,
         "stale": asset.stale,
@@ -60,6 +72,7 @@ def _row_dict(asset: AssetSnapshot) -> dict:
         "pool": asset.pool or "",
         "favorite": asset.favorite,
         "revision": asset.revision,
+        "searchHay": f"{asset.symbol} {asset.name} {asset.mint}".lower(),
         "scoreText": "—",
         "alertsText": "—",
     }
@@ -70,10 +83,10 @@ class AssetListModel(QAbstractListModel):
 
     KeyRole = Qt.UserRole + 1
     _ROLES = ("key", "symbol", "quote", "provider", "price", "priceText",
-              "changeText", "changeUp", "feed", "connected", "stale",
-              "messages", "spark", "scoreText", "alertsText",
+              "changeText", "changeUp", "direction", "feed", "connected",
+              "stale", "messages", "spark", "scoreText", "alertsText",
               "name", "mint", "chain", "venue", "favorite", "revision",
-              "dex", "pool")
+              "dex", "pool", "searchHay")
     countChanged = Signal()
 
     def __init__(self, parent: Optional[QObject] = None):
@@ -108,6 +121,8 @@ class AssetListModel(QAbstractListModel):
         amap = {a.key: a for a in assets}
         if changed is None:
             return self._sync_full(amap)
+        from falcon_terminal import perf as _perf
+        t0 = _perf.now()
         size_before = len(self._rows)
         self._remove_missing(amap)
         touched = {}
@@ -115,7 +130,9 @@ class AssetListModel(QAbstractListModel):
             asset = amap.get(key)
             if asset is None:
                 continue
-            row = _row_dict(asset)
+            prev = (self._rows[self._by_key[key]]["price"]
+                    if key in self._by_key else None)
+            row = _row_dict(asset, prev)
             if key in self._by_key:
                 i = self._by_key[key]
                 if self._rows[i] != row:
@@ -142,6 +159,8 @@ class AssetListModel(QAbstractListModel):
                 touched[i] = row
         if len(self._rows) != size_before:
             self.countChanged.emit()
+        _perf.global_tracker.measure("registry_to_ui", t0,
+                                     f"delta {len(touched)}/{len(amap)}")
         return touched
 
     def _remove_missing(self, amap) -> bool:
@@ -164,7 +183,9 @@ class AssetListModel(QAbstractListModel):
         before = len(self._rows)
         self._remove_missing(amap)
         for key, asset in amap.items():
-            row = _row_dict(asset)
+            prev = (self._rows[self._by_key[key]]["price"]
+                    if key in self._by_key else None)
+            row = _row_dict(asset, prev)
             if key in self._by_key:
                 i = self._by_key[key]
                 if self._rows[i] != row:
@@ -244,6 +265,15 @@ class SelectedAssetVM(QObject):
     def chartNote(self): return self._d.get("chartNote", "")
 
     @Property(str, notify=changed)
+    def freshness(self): return self._d.get("freshness", "Waiting for data")
+
+    @Property(str, notify=changed)
+    def semantics(self): return self._d.get("semantics", "—")
+
+    @Property(bool, notify=changed)
+    def isStale(self): return bool(self._d.get("isStale", False))
+
+    @Property(str, notify=changed)
     def provider(self): return self._d.get("provider", "—")
 
     @Property(str, notify=changed)
@@ -321,6 +351,8 @@ class SelectedAssetVM(QObject):
 
     @Slot(str)
     def select(self, key: str):
+        from falcon_terminal import perf as _perf
+        t0 = _perf.now()
         if key != self._key:
             self._key = key
             # Clear immediately: showing the previous asset's price/bid/pool
@@ -330,10 +362,40 @@ class SelectedAssetVM(QObject):
             self._last_price = None
             self._direction = 0
             self.changed.emit()
+            _perf.global_tracker.measure("asset_click_identity", t0, key)
+
+    def requestTimeframe(self, timeframe: str, supported=()) -> bool:
+        """Optimistic pill activation: the UI goes active immediately.
+
+        Returns True when the request was applied locally (caller still
+        syncs the backend). Shows cached values when present; the loading
+        flag is set so missing data shows a lightweight chart state at
+        once instead of leaving the old timeframe appearing active.
+        """
+        from falcon_terminal import perf as _perf
+        t0 = _perf.now()
+        if supported and timeframe not in tuple(supported):
+            return False
+        d = dict(self._d)
+        if d.get("timeframe") == timeframe and d.get("chartLoading") is False:
+            return True
+        d["timeframe"] = timeframe
+        # Assume a miss until the backend confirms a cache hit: the chart
+        # shows "Loading …" instantly, replaced by real data (or instantly
+        # by cache on the next poll). Never fakes candle data.
+        d["chartLoading"] = True
+        if d != self._d:
+            self._d = d
+            self.changed.emit()
+        _perf.global_tracker.measure("timeframe_active", t0, timeframe)
+        return True
 
     def sync(self, asset: Optional[AssetSnapshot]):
         if asset is None or asset.key != self._key:
             return
+        from falcon_terminal import perf as _perf
+        t0 = _perf.now()
+        had_chart = bool(self._d.get("candles"))
         price = asset.price
         if price is not None and self._last_price is not None and price != self._last_price:
             self._direction = 1 if price > self._last_price else -1
@@ -349,10 +411,13 @@ class SelectedAssetVM(QObject):
             "venue": asset.venue,
             "favorite": asset.favorite,
             "revision": asset.revision,
-            "timeframe": asset.active_timeframe or "1m",
+            "timeframe": asset.active_timeframe or self._d.get("timeframe", "1m"),
             "supportedTimeframes": list(asset.supported_timeframes or ("1m",)),
             "chartLoading": asset.chart_loading,
             "chartNote": asset.chart_note,
+            "freshness": fmt.freshness_text(asset.age_s, asset.stale),
+            "semantics": fmt.feed_semantics(asset.provider, asset.source),
+            "isStale": bool(asset.stale),
             "provider": asset.provider,
             "source": asset.source,
             "feed": _feed_text(asset),
@@ -388,9 +453,24 @@ class SelectedAssetVM(QObject):
             iv = asset.candle_interval or "—"
             d["candleState"] = (f"{iv} · CLOSED" if asset.candle_closed
                                 else f"{iv} · FORMING — provisional, not history")
+        pending_tf = self._d.get("timeframe")
+        if (pending_tf and self._d.get("chartLoading")
+                and asset.active_timeframe
+                and asset.active_timeframe != pending_tf):
+            # In-flight snapshot predates the user's timeframe click: keep
+            # the optimistic pill + loading + previous TF-scoped candles
+            # instead of flickering back to the stale timeframe. Live
+            # price/candle-line fields above still update honestly.
+            d["timeframe"] = pending_tf
+            d["chartLoading"] = True
+            d["history"] = self._d.get("history", [])
+            d["candles"] = self._d.get("candles", [])
         if d != self._d:
             self._d = d
             self.changed.emit()
+            if asset.chart_candles and not had_chart:
+                _perf.global_tracker.measure(
+                    "asset_click_chart", t0, asset.key)
 
     def clear(self):
         self._key = ""
@@ -410,6 +490,8 @@ class HealthVM(QObject):
         self._stale = False
         self._messages = 0
         self._detail = ""
+        self._state = "CONNECTING"
+        self._was_connected = False
 
     @Property(str, notify=changed)
     def text(self): return self._text
@@ -426,10 +508,15 @@ class HealthVM(QObject):
     @Property(str, notify=changed)
     def detail(self): return self._detail
 
+    @Property(str, notify=changed)
+    def state(self): return self._state
+
     def sync(self, snapshot: TerminalSnapshot):
         connected = any(a.connected for a in snapshot.assets)
         stale = any(a.stale for a in snapshot.assets if a.connected)
         messages = sum(a.messages for a in snapshot.assets)
+        has_error = any(bool(a.error) or a.state == "ERROR"
+                        for a in snapshot.assets)
         parts = []
         for a in snapshot.assets:
             label = f"{a.provider}: {_feed_text(a)}"
@@ -439,15 +526,25 @@ class HealthVM(QObject):
         text = " · ".join(parts) if parts else "Opening live feeds…"
         detail = "  |  ".join(
             f"{a.symbol}: {fmt.age_text(a.age_s)}" for a in snapshot.assets)
-        if (text, connected, stale, messages, detail) != (
-                self._text, self._connected, self._stale, self._messages, self._detail):
+        state = fmt.connection_state(
+            connected, stale,
+            "ERROR" if has_error else ("CONNECTED" if connected else "CONNECTING"),
+            "error" if has_error else None,
+            was_connected=self._was_connected)
+        if connected:
+            self._was_connected = True
+        if (text, connected, stale, messages, detail, state) != (
+                self._text, self._connected, self._stale, self._messages,
+                self._detail, self._state):
             self._text, self._connected, self._stale = text, connected, stale
             self._messages, self._detail = messages, detail
+            self._state = state
             self.changed.emit()
 
     def mark_switching(self, symbol: str, mint: str):
         self._text = f"Switching to {symbol} / {mint[:8]}… — stopping feeds."
         self._connected = False
+        self._state = "RECONNECTING"
         self.changed.emit()
 
 
@@ -464,6 +561,8 @@ class NavVM(QObject):
 
     @Slot(str)
     def go(self, page: str):
+        # Immediate local state switch; backend state (registry, selection,
+        # favorites, cached history) is preserved, never rebuilt.
         if page in self.PAGES and page != self._page:
             self._page = page
             self.changed.emit()
@@ -481,6 +580,9 @@ class TerminalController(QObject):
         super().__init__(parent)
         from falcon_terminal.store import LocalStore
         from falcon_terminal.timeframes import TIMEFRAMES
+        from falcon_terminal import perf as _perf
+        self._created_at = _perf.now()
+        self._first_snap = True
         self._TIMEFRAMES = TIMEFRAMES
         self._targets = (symbol, solana_mint or "")
         self._poll_interval = poll_interval
@@ -609,7 +711,7 @@ class TerminalController(QObject):
         """Select a canonical id everywhere (recent + persist + backend)."""
         if not key:
             return
-        self.selected.select(key)
+        self.selected.select(key)  # immediate identity + clearing (<100ms)
         self._on_selection(key)
 
     def _on_selection(self, key: str) -> None:
@@ -621,13 +723,32 @@ class TerminalController(QObject):
 
     @Slot(str)
     def setTimeframe(self, timeframe: str):
-        """Request a chart timeframe (validated; backend fetches honestly)."""
+        """Request a chart timeframe (validated; backend fetches honestly).
+
+        The pill activates immediately (optimistic local state + loading
+        feedback); real candle data follows from cache or the fetcher.
+        """
         if timeframe not in self._TIMEFRAMES:
             return
         key = self.selected.key
         if key:
             self._tf_by_key[key] = timeframe
+        # Optimistic activation first so the click feels instant (<50ms);
+        # supported list comes from the last synced snapshot when known.
+        try:
+            supported = list(self.selected.supportedTimeframes or ())
+        except Exception:
+            supported = ()
+        if key:
+            self.selected.requestTimeframe(
+                timeframe, supported or tuple(self._TIMEFRAMES))
         self._sync_bridge_view()
+
+    @Slot(result=str)
+    def perfReport(self) -> str:
+        """Human-readable timings for the quality pass (no guessing)."""
+        from falcon_terminal import perf as _perf
+        return _perf.global_tracker.report()
 
     @Slot(str, result=bool)
     def toggleFavorite(self, key: str) -> bool:
@@ -686,6 +807,19 @@ class TerminalController(QObject):
             return
         if snapshot is None:
             return
+        if self._first_snap:
+            # First market state after startup (window was already visible;
+            # network init never blocks window creation).
+            self._first_snap = False
+            from falcon_terminal import perf as _perf
+            if "app_start" in _perf.global_tracker._marks:
+                _perf.global_tracker.measure_since(
+                    "startup_first_state", "app_start",
+                    f"{len(snapshot.assets)} rows")
+            else:
+                _perf.global_tracker.measure(
+                    "startup_first_state", self._created_at,
+                    f"{len(snapshot.assets)} rows")
         self.assets.sync(snapshot.assets, getattr(snapshot, "changed", None))
         if not self.selected.key and snapshot.assets:
             keys = [a.key for a in snapshot.assets]
