@@ -124,5 +124,45 @@ class TestBranding(unittest.TestCase):
             self.assertIn("Legacy alias", f.read())
 
 
+class TestCommittedDatasets(unittest.TestCase):
+    """CI regression: every committed versioned manifest must resolve and
+    its pinned sha256 must match the checked-out CSV bytes on ANY platform
+    (enforced by .gitattributes LF pinning + LF-normalized files)."""
+
+    EXPECTED = sorted(
+        f"data/falcon-{s}-{iv}.manifest.json"
+        for s in ("BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT")
+        for iv in ("1h", "4h"))
+
+    def test_gitattributes_pins_lf(self):
+        with open(".gitattributes", encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("data/*.csv", text)
+        self.assertIn("eol=lf", text)
+
+    def test_all_committed_manifests_verify(self):
+        import glob
+        import os
+        from research.datafiles import load_versioned_dataset, sha256_file
+        found = sorted(p.replace(os.sep, "/")
+                       for p in glob.glob("data/falcon-*-*.manifest.json"))
+        self.assertEqual(found, self.EXPECTED)
+        for mp in found:
+            candles, man = load_versioned_dataset(mp)
+            csv_path = mp.replace(".manifest.json", ".csv")
+            self.assertEqual(man["sha256"], sha256_file(csv_path), mp)
+            self.assertEqual(man["rows"], len(candles), mp)
+            self.assertGreater(len(candles), 0, mp)
+            raw = open(csv_path, "rb").read()
+            self.assertNotIn(b"\r", raw, mp)
+
+    def test_sample_csvs_still_load(self):
+        from market_data import load_ohlcv_csv
+        for path in ("data/sample_ohlcv.csv", "data/sample_ohlcv_2024-02.csv"):
+            candles, stats = load_ohlcv_csv(path)
+            self.assertGreater(stats["loaded"], 0, path)
+            self.assertEqual(len(candles), stats["loaded"], path)
+
+
 if __name__ == "__main__":
     unittest.main()

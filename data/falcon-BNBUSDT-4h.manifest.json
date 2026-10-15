@@ -1,12 +1,12 @@
 {
   "created_at": "2026-10-14T18:13:42.229852+00:00",
-  "dataset_id": "falcon-BNBUSDT-4h-6146bbfc07bf",
+  "dataset_id": "falcon-BNBUSDT-4h-3281a21c9e8f",
   "end": "2024-12-31T20:00:00+00:00",
   "interval": "4h",
   "rows": 15625,
   "schema_version": 1,
-  "sha256": "6146bbfc07bfbe86c56b55dd57c464f230caaefa1116ad05eb93b8028b9457fe",
-  "source": "resampled 4x from falcon-BNBUSDT-1h-fe8a1a22b52e",
+  "sha256": "3281a21c9e8f55fd4628fe9e779db922f4d0dc7cac779aff4e8d77a4b052493d",
+  "source": "resampled 4x from falcon-BNBUSDT-1h-8b1e546edafd",
   "start": "2017-11-06T04:00:00+00:00",
   "symbol": "BNB/USDT",
   "validation": {

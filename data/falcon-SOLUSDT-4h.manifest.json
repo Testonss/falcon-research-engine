@@ -1,12 +1,12 @@
 {
   "created_at": "2026-10-14T18:13:41.105444+00:00",
-  "dataset_id": "falcon-SOLUSDT-4h-e90d2f58e0cd",
+  "dataset_id": "falcon-SOLUSDT-4h-ecb622225683",
   "end": "2024-12-31T20:00:00+00:00",
   "interval": "4h",
   "rows": 9609,
   "schema_version": 1,
-  "sha256": "e90d2f58e0cddef220c3ebf9d5be832af0163d447a07e29e0ac06e7a9f40d27b",
-  "source": "resampled 4x from falcon-SOLUSDT-1h-655749fa6bc1",
+  "sha256": "ecb622225683784c727c671dbb8beda7efe324d44867ff129daf508c08d68c73",
+  "source": "resampled 4x from falcon-SOLUSDT-1h-b3b7c6e57be8",
   "start": "2020-08-11T08:00:00+00:00",
   "symbol": "SOL/USDT",
   "validation": {

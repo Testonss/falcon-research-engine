@@ -151,7 +151,7 @@ falcon research --data "data/falcon-*1h.manifest.json" \
 11. **Paper candidate** — replayed through the identical stack; rolling
     divergence vs backtest reported with warnings.
 
-Current verified capabilities: 230 automated tests (full suite green),
+Current verified capabilities: 239 automated tests (full suite green),
 6 strategy families, 2 execution models (`next_open`/`next_close`),
 versioned datasets with sha256 verification (see Data below), every
 rejection persisted with reason + metrics in SQLite, clean installed
@@ -193,7 +193,7 @@ recorded in manifests, never filled.
 ## Development
 
 ```bash
-python -m unittest discover -s tests   # full suite (230 tests)
+python -m unittest discover -s tests   # full suite (239 tests)
 python scripts/falcon.py --help        # CLI without install
 ```
 

@@ -7,7 +7,7 @@ First public milestone of an autonomous quantitative research engine.
 
 ## What is validated in this release
 
-- 230 automated tests passing (full suite green: 230 run, 0 failures;
+- 239 automated tests passing (full suite green: 239 run, 0 failures;
   locally verified on Windows; Linux + remote CI matrix pending —
   see Limitations).
 - Campaign rerun reproduces the identical funnel (determinism verified).

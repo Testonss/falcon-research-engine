@@ -1,0 +1,5 @@
+# Deterministic line endings: committed CSV datasets (and their
+# manifests) always check out with LF on every platform, so the sha256
+# pinned in each .manifest.json verifies identically on Windows and Linux.
+data/*.csv text eol=lf
+data/*.manifest.json text eol=lf

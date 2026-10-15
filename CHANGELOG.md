@@ -96,7 +96,7 @@ First public milestone: autonomous quantitative research framework.
 - Exact incremental EMA (bit-identical, O(n) instead of O(n²)).
 
 ### Verified
-- 230 automated tests passing (full suite green, exact count).
+- 239 automated tests passing (full suite green, exact count).
 - Sample campaign 16→0 and 100-candidate real-data campaign executed with
   real funnels; zero survivors accepted as valid outcomes.
 - Live-money paths remain disabled by architecture (verified by tests).
