@@ -1,0 +1,28 @@
+{
+  "created_at": "2026-10-14T10:01:28.923549+00:00",
+  "dataset_id": "falcon-ETHUSDT-1h-824bf4e2e4c9",
+  "end": "2025-01-01T00:00:00+00:00",
+  "interval": "1h",
+  "raw_file": "BINANCE_ETHUSDT_1h.json",
+  "rows": 64525,
+  "schema_version": 1,
+  "sha256": "824bf4e2e4c927449eda72f9574c08428ac1f95288bcafd68ef0f9a7a21a1915",
+  "source": "api.binance.com/api/v3/klines (public, no key)",
+  "start": "2017-08-17T04:00:00+00:00",
+  "symbol": "ETH/USDT",
+  "validation": {
+    "bad_examples": [],
+    "bad_rows": 0,
+    "duplicates": 0,
+    "expected_step_s": 3600,
+    "gaps": 28,
+    "impossible_ohlc": 0,
+    "interval_ok_ratio": 0.9995660529415411,
+    "largest_gap_bars": 33,
+    "missing_bars": 128,
+    "n_parseable": 64525,
+    "n_rows": 64525,
+    "negative_volume": 0,
+    "out_of_order": 0
+  }
+}

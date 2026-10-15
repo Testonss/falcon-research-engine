@@ -1,0 +1,18 @@
+{
+  "created_at": "2026-10-14T18:13:39.201464+00:00",
+  "dataset_id": "falcon-BTCUSDT-4h-f340186c76d5",
+  "end": "2024-12-31T20:00:00+00:00",
+  "interval": "4h",
+  "rows": 16109,
+  "schema_version": 1,
+  "sha256": "f340186c76d53df2cbad0e57ffd5778f2c4e00c83f454049f42b7873e110ceb4",
+  "source": "resampled 4x from falcon-BTCUSDT-1h-6d56a73d7b81",
+  "start": "2017-08-17T04:00:00+00:00",
+  "symbol": "BTC/USDT",
+  "validation": {
+    "dropped_bars": 89,
+    "dropped_partial": 39,
+    "factor": 4,
+    "resampled_from_rows": 64525
+  }
+}

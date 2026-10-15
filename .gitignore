@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+logs/
+
+# Research artefacts (generated, never committed)
+*.db
+*.db-wal
+*.db-shm
+reports/
+.env
+.env.*
+!.env.example
+
+# Raw exchange dumps (reproducible via scripts/fetch_data.py; versioned
+# canonical CSVs + manifests under data/ ARE committed intentionally)
+data/raw/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp

@@ -1,0 +1,2 @@
+# Falcon Research Engine - no third-party runtime dependencies.
+# Python >= 3.10 stdlib only.

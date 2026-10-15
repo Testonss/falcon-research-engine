@@ -1,0 +1,18 @@
+{
+  "created_at": "2026-10-14T18:13:41.105444+00:00",
+  "dataset_id": "falcon-SOLUSDT-4h-e90d2f58e0cd",
+  "end": "2024-12-31T20:00:00+00:00",
+  "interval": "4h",
+  "rows": 9609,
+  "schema_version": 1,
+  "sha256": "e90d2f58e0cddef220c3ebf9d5be832af0163d447a07e29e0ac06e7a9f40d27b",
+  "source": "resampled 4x from falcon-SOLUSDT-1h-655749fa6bc1",
+  "start": "2020-08-11T08:00:00+00:00",
+  "symbol": "SOL/USDT",
+  "validation": {
+    "dropped_bars": 35,
+    "dropped_partial": 15,
+    "factor": 4,
+    "resampled_from_rows": 38471
+  }
+}

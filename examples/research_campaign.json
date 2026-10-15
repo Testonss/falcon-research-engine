@@ -1,0 +1,19 @@
+{
+  "campaign_id": "example_camp",
+  "symbol": "BTC/USDT",
+  "symbols": ["BTC/USDT"],
+  "families": ["momentum", "mean_reversion", "breakout"],
+  "candidate_limit": 12,
+  "seed": 7,
+  "train_ratio": 0.6,
+  "validation_ratio": 0.2,
+  "embargo_bars": 5,
+  "warmup_bars": 30,
+  "n_splits": 2,
+  "train_bars": 60,
+  "test_bars": 40,
+  "execution_model": "next_close",
+  "optimizer": "random",
+  "allow_holdout": false,
+  "comment": "Small example campaign. Run: falcon research --data data/sample_ohlcv.csv --families momentum mean_reversion breakout --limit 12 --seed 7 --db falcon_example.db --campaign-id example_camp. For real multi-symbol research use versioned manifests, e.g. --data data/falcon-BTCUSDT-4h.manifest.json --symbols BTC/USDT ETH/USDT."
+}

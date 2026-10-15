@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "falcon-research-engine"
+version = "0.1.0"
+description = "Falcon Research Engine — an open-source autonomous quantitative research engine."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+keywords = ["quantitative-finance", "research", "backtesting", "paper-trading"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Office/Business :: Financial",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = []
+
+[tool.setuptools]
+packages = [
+    "backtest", "bot_logging", "config", "evaluation", "exchange",
+    "execution", "market_data", "metrics", "paper", "portfolio",
+    "research", "risk", "strategy", "scripts",
+]
+
+[project.scripts]
+falcon = "scripts.falcon:main"
+
+[tool.setuptools.package-data]
+"*" = ["*.md"]

@@ -1,0 +1,18 @@
+{
+  "created_at": "2026-10-14T18:13:40.386846+00:00",
+  "dataset_id": "falcon-ETHUSDT-4h-a3cc583b98bf",
+  "end": "2024-12-31T20:00:00+00:00",
+  "interval": "4h",
+  "rows": 16109,
+  "schema_version": 1,
+  "sha256": "a3cc583b98bf3680ad40fe8a7efa1c6ae30d39bc1fb1da39b6c4cfbc88935257",
+  "source": "resampled 4x from falcon-ETHUSDT-1h-824bf4e2e4c9",
+  "start": "2017-08-17T04:00:00+00:00",
+  "symbol": "ETH/USDT",
+  "validation": {
+    "dropped_bars": 89,
+    "dropped_partial": 39,
+    "factor": 4,
+    "resampled_from_rows": 64525
+  }
+}

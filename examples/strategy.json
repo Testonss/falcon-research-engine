@@ -1,0 +1,7 @@
+{
+  "family": "momentum",
+  "params": {
+    "momentum_period": 14,
+    "momentum_threshold": 0.01
+  }
+}
