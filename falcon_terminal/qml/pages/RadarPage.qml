@@ -45,6 +45,7 @@ ColumnLayout {
     }
 
     // Filter bar
+    property bool favOnly: false
     RowLayout {
         Layout.fillWidth: true
         spacing: FalconTheme.s12
@@ -87,6 +88,25 @@ ColumnLayout {
                 opacity: 0.6
             }
         }
+        Rectangle {
+            id: favToggle
+            Layout.preferredWidth: 44
+            Layout.preferredHeight: 34
+            radius: FalconTheme.r6
+            color: root.favOnly ? "#2a2118" : FalconTheme.bgInput
+            border.color: root.favOnly ? FalconTheme.accentGold : FalconTheme.borderDefault
+            Text {
+                anchors.centerIn: parent
+                text: "★"
+                color: root.favOnly ? FalconTheme.accentGold : FalconTheme.textMuted
+                font.pixelSize: 16
+            }
+            MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.favOnly = !root.favOnly
+            }
+        }
     }
 
     // Main split
@@ -108,20 +128,40 @@ ColumnLayout {
                 clip: true
                 delegate: Rectangle {
                     id: row
-                    property bool match: (search.text === "" || symbol.toLowerCase().indexOf(search.text.toLowerCase()) >= 0)
-                        && (providerBox.currentText === "All" || provider === providerBox.currentText)
+                    property bool match: (search.text === "" || symbol.toLowerCase().indexOf(search.text.toLowerCase()) >= 0
+                            || name.toLowerCase().indexOf(search.text.toLowerCase()) >= 0
+                            || mint.toLowerCase().indexOf(search.text.toLowerCase()) >= 0)
+                        && (providerBox.currentText === "All" || provider === providerBox.currentText.toLowerCase())
+                        && (!root.favOnly || favorite)
                     visible: match
                     height: match ? 56 : 0
                     width: table.width
                     color: selected.key === key ? FalconTheme.bgSelected : (index % 2 ? FalconTheme.bgPanel : FalconTheme.bgSecondary)
                     border.color: selected.key === key ? FalconTheme.accentGold : "transparent"
                     border.width: 1
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: selected.select(key)
+                    }
                     RowLayout {
                         anchors.fill: parent
                         anchors.leftMargin: FalconTheme.s12
                         anchors.rightMargin: FalconTheme.s12
                         spacing: FalconTheme.s8
-                        Text { text: "☆"; color: FalconTheme.textMuted; font.pixelSize: 14; Layout.preferredWidth: 20 }
+                        Text {
+                            text: favorite ? "★" : "☆"
+                            color: favorite ? FalconTheme.accentGold : FalconTheme.textMuted
+                            font.pixelSize: 14
+                            Layout.preferredWidth: 20
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: function(mouse) {
+                                    mouse.accepted = true
+                                    ctrl.toggleFavorite(key)
+                                }
+                            }
+                        }
                         ColumnLayout {
                             Layout.preferredWidth: 130
                             spacing: 0
@@ -134,10 +174,6 @@ ColumnLayout {
                         Text { text: scoreText; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; Layout.preferredWidth: 60; horizontalAlignment: Text.AlignHCenter }
                         Text { text: alertsText; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; Layout.preferredWidth: 60; horizontalAlignment: Text.AlignHCenter }
                         Sparkline { values: spark; up: changeUp !== false; fontFamily: FalconTheme.fontFamily; Layout.preferredWidth: 110; Layout.preferredHeight: 34 }
-                    }
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: selected.select(key)
                     }
                 }
                 header: Rectangle {
@@ -205,8 +241,19 @@ ColumnLayout {
                     Text { text: selected.change; visible: selected.hasChange; color: selected.changeUp ? FalconTheme.positive : FalconTheme.negative; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; font.bold: true }
                 }
                 Text { text: selected.feed; color: selected.live ? FalconTheme.positive : FalconTheme.warning; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small; font.bold: true }
-                TimePills { active: "1m"; supported: ["1m"] }
+                TimePills {
+                    active: selected.timeframe
+                    supported: selected.supportedTimeframes
+                    onPick: function(tf) { ctrl.setTimeframe(tf) }
+                }
                 Text { text: "LIVE CHART"; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.micro }
+                Text {
+                    visible: selected.chartLoading || selected.chartNote !== ""
+                    text: selected.chartLoading ? ("Loading " + selected.timeframe + "…") : selected.chartNote
+                    color: FalconTheme.textSecondary
+                    font.family: FalconTheme.fontFamily
+                    font.pixelSize: FalconTheme.small
+                }
                 PriceChart { id: radarChart; Layout.fillWidth: true; Layout.preferredHeight: 170; mode: "area"; fontFamily: FalconTheme.fontFamily; history: selected.history; candles: selected.candles }
                 GridLayout {
                     columns: 3

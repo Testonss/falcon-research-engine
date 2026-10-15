@@ -22,7 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--solana-mint", default=None,
                         help="alias of --mint (kept for compatibility)")
     parser.add_argument("--page", default="radar",
-                        choices=("radar", "signals", "meme"))
+                        choices=("radar", "signals", "meme", "assets"))
     parser.add_argument("--poll-interval", type=float, default=15.0,
                         help="Solana poll seconds, minimum 2")
     return parser

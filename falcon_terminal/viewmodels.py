@@ -6,7 +6,7 @@ QML bindings. No provider, research, strategy or execution imports here.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from PySide6.QtCore import (
     Property,
@@ -41,6 +41,10 @@ def _row_dict(asset: AssetSnapshot) -> dict:
     return {
         "key": asset.key,
         "symbol": asset.symbol,
+        "name": asset.name,
+        "mint": asset.mint,
+        "chain": asset.chain,
+        "venue": asset.venue,
         "quote": asset.quote,
         "provider": asset.provider,
         "price": asset.price if asset.price is not None else 0.0,
@@ -52,6 +56,10 @@ def _row_dict(asset: AssetSnapshot) -> dict:
         "stale": asset.stale,
         "messages": asset.messages,
         "spark": list(asset.price_history[-SPARK_POINTS:]),
+        "dex": asset.dex or "",
+        "pool": asset.pool or "",
+        "favorite": asset.favorite,
+        "revision": asset.revision,
         "scoreText": "—",
         "alertsText": "—",
     }
@@ -63,7 +71,9 @@ class AssetListModel(QAbstractListModel):
     KeyRole = Qt.UserRole + 1
     _ROLES = ("key", "symbol", "quote", "provider", "price", "priceText",
               "changeText", "changeUp", "feed", "connected", "stale",
-              "messages", "spark", "scoreText", "alertsText")
+              "messages", "spark", "scoreText", "alertsText",
+              "name", "mint", "chain", "venue", "favorite", "revision",
+              "dex", "pool")
     countChanged = Signal()
 
     def __init__(self, parent: Optional[QObject] = None):
@@ -88,16 +98,75 @@ class AssetListModel(QAbstractListModel):
         name = self._ROLES[role - self.KeyRole]
         return row[name]
 
-    def sync(self, assets) -> dict:
-        """Reconcile rows with fresh DTOs. Returns changed row indices."""
-        changed = {}
-        seen = set()
-        before = len(self._rows)
-        for asset in assets:
-            seen.add(asset.key)
+    def sync(self, assets, changed=None) -> dict:
+        """Reconcile rows with fresh DTOs. Returns changed row indices.
+
+        When `changed` (snapshot delta keys) is provided, rows outside it
+        are left untouched — O(changed) instead of O(N) — while inserts
+        and removals are still fully reconciled.
+        """
+        amap = {a.key: a for a in assets}
+        if changed is None:
+            return self._sync_full(amap)
+        size_before = len(self._rows)
+        self._remove_missing(amap)
+        touched = {}
+        for key in changed:
+            asset = amap.get(key)
+            if asset is None:
+                continue
             row = _row_dict(asset)
-            if asset.key in self._by_key:
-                i = self._by_key[asset.key]
+            if key in self._by_key:
+                i = self._by_key[key]
+                if self._rows[i] != row:
+                    self._rows[i] = row
+                    touched[i] = row
+                    top = self.index(i, 0)
+                    self.dataChanged.emit(top, top)
+            else:
+                i = len(self._rows)
+                self.beginInsertRows(QModelIndex(), i, i)
+                self._rows.append(row)
+                self._by_key[key] = i
+                self.endInsertRows()
+                touched[i] = row
+        # Inserts of rows the delta did not mention (e.g. first publish).
+        for key, asset in amap.items():
+            if key not in self._by_key:
+                row = _row_dict(asset)
+                i = len(self._rows)
+                self.beginInsertRows(QModelIndex(), i, i)
+                self._rows.append(row)
+                self._by_key[key] = i
+                self.endInsertRows()
+                touched[i] = row
+        if len(self._rows) != size_before:
+            self.countChanged.emit()
+        return touched
+
+    def _remove_missing(self, amap) -> bool:
+        """Drop rows absent from the snapshot, highest index first."""
+        doomed = sorted(
+            (self._by_key[k] for k in self._by_key if k not in amap),
+            reverse=True)
+        for i in doomed:
+            key = self._rows[i]["key"]
+            self._by_key.pop(key, None)
+            self.beginRemoveRows(QModelIndex(), i, i)
+            self._rows.pop(i)
+            self.endRemoveRows()
+        if doomed:
+            self._by_key = {k: n for n, k in enumerate(r["key"] for r in self._rows)}
+        return bool(doomed)
+
+    def _sync_full(self, amap) -> dict:
+        changed = {}
+        before = len(self._rows)
+        self._remove_missing(amap)
+        for key, asset in amap.items():
+            row = _row_dict(asset)
+            if key in self._by_key:
+                i = self._by_key[key]
                 if self._rows[i] != row:
                     self._rows[i] = row
                     changed[i] = row
@@ -107,14 +176,8 @@ class AssetListModel(QAbstractListModel):
                 i = len(self._rows)
                 self.beginInsertRows(QModelIndex(), i, i)
                 self._rows.append(row)
-                self._by_key[asset.key] = i
+                self._by_key[key] = i
                 self.endInsertRows()
-        for key in [k for k in self._by_key if k not in seen]:
-            i = self._by_key.pop(key)
-            self.beginRemoveRows(QModelIndex(), i, i)
-            self._rows.pop(i)
-            self.endRemoveRows()
-            self._by_key = {k: n for n, k in enumerate(r["key"] for r in self._rows)}
         if len(self._rows) != before:
             self.countChanged.emit()
         return changed
@@ -149,6 +212,36 @@ class SelectedAssetVM(QObject):
 
     @Property(str, notify=changed)
     def symbol(self): return self._d.get("symbol", "—")
+
+    @Property(str, notify=changed)
+    def name(self): return self._d.get("name", "")
+
+    @Property(str, notify=changed)
+    def mint(self): return self._d.get("mint", "")
+
+    @Property(str, notify=changed)
+    def chain(self): return self._d.get("chain", "")
+
+    @Property(str, notify=changed)
+    def venue(self): return self._d.get("venue", "")
+
+    @Property(bool, notify=changed)
+    def favorite(self): return bool(self._d.get("favorite", False))
+
+    @Property(int, notify=changed)
+    def revision(self): return int(self._d.get("revision", 0))
+
+    @Property(str, notify=changed)
+    def timeframe(self): return self._d.get("timeframe", "1m")
+
+    @Property('QVariantList', notify=changed)
+    def supportedTimeframes(self): return self._d.get("supportedTimeframes", ["1m"])
+
+    @Property(bool, notify=changed)
+    def chartLoading(self): return bool(self._d.get("chartLoading", False))
+
+    @Property(str, notify=changed)
+    def chartNote(self): return self._d.get("chartNote", "")
 
     @Property(str, notify=changed)
     def provider(self): return self._d.get("provider", "—")
@@ -230,6 +323,10 @@ class SelectedAssetVM(QObject):
     def select(self, key: str):
         if key != self._key:
             self._key = key
+            # Clear immediately: showing the previous asset's price/bid/pool
+            # under a new identity (even for one frame) is cross-asset
+            # leakage. Fields repopulate from the new asset's own state.
+            self._d = {}
             self._last_price = None
             self._direction = 0
             self.changed.emit()
@@ -246,6 +343,16 @@ class SelectedAssetVM(QObject):
             self._last_price = price
         d = {
             "symbol": asset.symbol,
+            "name": asset.name,
+            "mint": asset.mint,
+            "chain": asset.chain,
+            "venue": asset.venue,
+            "favorite": asset.favorite,
+            "revision": asset.revision,
+            "timeframe": asset.active_timeframe or "1m",
+            "supportedTimeframes": list(asset.supported_timeframes or ("1m",)),
+            "chartLoading": asset.chart_loading,
+            "chartNote": asset.chart_note,
             "provider": asset.provider,
             "source": asset.source,
             "feed": _feed_text(asset),
@@ -364,32 +471,103 @@ class NavVM(QObject):
 
 class TerminalController(QObject):
     errorRaised = Signal(str)
+    listsChanged = Signal()
+    watchedChanged = Signal()
 
     def __init__(self, symbol: str = "BTCUSDT", solana_mint: str = "",
                  poll_interval: float = 15.0, parent: Optional[QObject] = None,
-                 bridge_factory=None):
+                 bridge_factory=None, universe: bool = False,
+                 track_mints: tuple = (), store_path=None):
         super().__init__(parent)
+        from falcon_terminal.store import LocalStore
+        from falcon_terminal.timeframes import TIMEFRAMES
+        self._TIMEFRAMES = TIMEFRAMES
         self._targets = (symbol, solana_mint or "")
         self._poll_interval = poll_interval
         self._bridge_factory = bridge_factory or TerminalBridge
+        self._universe = bool(universe)
+        self._track_mints = tuple(track_mints)
+        self._store = LocalStore(store_path)
+        self._watched: Set[str] = set()
+        self._tf_by_key: Dict[str, str] = {}
+        self._last_view: tuple = (None, None)
+        self._last_providers: List[str] = []
+        self._last_chains: List[str] = []
+        self._last_quotes: List[str] = []
+        self._last_dexes: List[str] = []
         self._bridge = None
         self._timer: Optional[QTimer] = None
         self._switching = False
+        self._last_selected_key: str = ""
         self.assets = AssetListModel(self)
         self.selected = SelectedAssetVM(self)
         self.health = HealthVM(self)
         self.nav = NavVM(self)
+
+    # -- discoverable metadata (drives filter combos; grows with providers) ----
+    @Property('QVariantList', notify=listsChanged)
+    def assetProviders(self): return self._last_providers
+
+    @Property('QVariantList', notify=listsChanged)
+    def assetChains(self):
+        # Empty chain (centralized venues) displays as CEX in filters.
+        return ["CEX" if c == "" else c for c in self._last_chains]
+
+    @Property('QVariantList', notify=listsChanged)
+    def assetQuotes(self): return self._last_quotes
+
+    @Property('QVariantList', notify=listsChanged)
+    def assetDexes(self): return self._last_dexes
+
+    @Property('QVariantList', notify=listsChanged)
+    def recentKeys(self): return list(self._store.recent)
+
+    @Property(int, notify=listsChanged)
+    def favoritesCount(self): return len(self._store.favorites)
+
+    @Property('QVariantList', notify=watchedChanged)
+    def watchedKeys(self): return sorted(self._watched)
+
+    def _refresh_lists(self, snapshot) -> None:
+        providers, chains, quotes, dexes = [], [], [], []
+        for a in snapshot.assets:
+            if a.provider not in providers:
+                providers.append(a.provider)
+            if a.chain not in chains:
+                chains.append(a.chain)
+            if a.quote and a.quote not in quotes:
+                quotes.append(a.quote)
+            dex = a.dex or ""
+            if dex and dex not in dexes:
+                dexes.append(dex)
+        providers.sort()
+        chains.sort()
+        quotes.sort()
+        dexes.sort()
+        if (providers, chains, quotes, dexes) != (
+                getattr(self, "_last_providers", None),
+                getattr(self, "_last_chains", None),
+                getattr(self, "_last_quotes", None),
+                getattr(self, "_last_dexes", None)):
+            self._last_providers, self._last_chains = providers, chains
+            self._last_quotes, self._last_dexes = quotes, dexes
+            self.listsChanged.emit()
 
     @Slot()
     def start(self):
         if self._bridge is not None:
             return
         symbol, mint = self._targets
+        kwargs = dict(symbol=symbol, solana_mint=mint,
+                      poll_interval=self._poll_interval)
+        if self._universe:
+            kwargs.update(universe=True, track_mints=self._track_mints)
         try:
-            self._bridge = self._bridge_factory(symbol=symbol, solana_mint=mint,
-                                                poll_interval=self._poll_interval)
+            self._bridge = self._bridge_factory(**kwargs)
         except TypeError:
             self._bridge = self._bridge_factory()
+        if hasattr(self._bridge, "set_favorites"):
+            self._bridge.set_favorites(self._store.favorites)
         self._bridge.start()
         if self._timer is None:
             self._timer = QTimer(self)
@@ -425,6 +603,78 @@ class TerminalController(QObject):
         self._switching = False
         self.start()
 
+    # -- functional market surface -----------------------------------------------
+    @Slot(str)
+    def selectAsset(self, key: str):
+        """Select a canonical id everywhere (recent + persist + backend)."""
+        if not key:
+            return
+        self.selected.select(key)
+        self._on_selection(key)
+
+    def _on_selection(self, key: str) -> None:
+        self._store.touch_recent(key)
+        self._store.set_selected(key)
+        self._store.save()
+        self._last_selected_key = key
+        self._sync_bridge_view()
+
+    @Slot(str)
+    def setTimeframe(self, timeframe: str):
+        """Request a chart timeframe (validated; backend fetches honestly)."""
+        if timeframe not in self._TIMEFRAMES:
+            return
+        key = self.selected.key
+        if key:
+            self._tf_by_key[key] = timeframe
+        self._sync_bridge_view()
+
+    @Slot(str, result=bool)
+    def toggleFavorite(self, key: str) -> bool:
+        """Flip favorite (persisted). Returns the new state."""
+        if not key:
+            return False
+        new_state = self._store.toggle_favorite(key)
+        self._store.save()
+        bridge = self._bridge
+        if bridge is not None and hasattr(bridge, "toggle_favorite"):
+            bridge.toggle_favorite(key)
+        self.listsChanged.emit()
+        return new_state
+
+    @Slot(str)
+    def toggleWatch(self, key: str):
+        """Local-only watch flag (no backend, no persistence)."""
+        if not key:
+            return
+        if key in self._watched:
+            self._watched.discard(key)
+        else:
+            self._watched.add(key)
+        self.watchedChanged.emit()
+
+    @Slot(str, result=str)
+    def addMint(self, mint: str) -> str:
+        """Track a Solana mint. Returns "" or a human-readable error."""
+        bridge = self._bridge
+        if bridge is None or not hasattr(bridge, "add_mint"):
+            return "market backend not ready"
+        return bridge.add_mint(mint or "")
+
+    def _sync_bridge_view(self) -> None:
+        bridge = self._bridge
+        if bridge is None:
+            return
+        key = self.selected.key
+        tf = self._tf_by_key.get(key, "1m") if key else "1m"
+        if (key, tf) == self._last_view:
+            return  # already synced; skip redundant backend calls
+        self._last_view = (key, tf)
+        if hasattr(bridge, "set_selection"):
+            bridge.set_selection(key)
+        if hasattr(bridge, "set_timeframe"):
+            bridge.set_timeframe(tf)
+
     def _poll(self):
         bridge = self._bridge
         if bridge is None:
@@ -436,9 +686,21 @@ class TerminalController(QObject):
             return
         if snapshot is None:
             return
-        self.assets.sync(snapshot.assets)
+        self.assets.sync(snapshot.assets, getattr(snapshot, "changed", None))
         if not self.selected.key and snapshot.assets:
-            self.selected.select(snapshot.assets[0].key)
+            keys = [a.key for a in snapshot.assets]
+            preferred = self._store.selected if self._store.selected in keys else keys[0]
+            self.selectAsset(preferred)
         current = next((a for a in snapshot.assets if a.key == self.selected.key), None)
+        # Selection follows the user even across provider switches: if the
+        # selected id vanished from the feed, keep the last known selection
+        # (no cross-asset leakage) instead of jumping to another row.
         self.selected.sync(current)
+        # Any selection change — via selectAsset() or a direct QML
+        # selected.select() — syncs recent/persisted/backend state exactly once.
+        if self.selected.key and self.selected.key != self._last_selected_key:
+            self._on_selection(self.selected.key)
+        elif getattr(bridge, "_selected_id", None) != self.selected.key:
+            self._sync_bridge_view()
+        self._refresh_lists(snapshot)
         self.health.sync(snapshot)

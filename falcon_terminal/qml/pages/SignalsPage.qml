@@ -56,9 +56,20 @@ ColumnLayout {
                 spacing: FalconTheme.s8
                 RowLayout {
                     Layout.fillWidth: true
-                    TimePills { active: "1m"; supported: ["1m"] }
+                    TimePills {
+                        active: selected.timeframe
+                        supported: selected.supportedTimeframes
+                        onPick: function(tf) { ctrl.setTimeframe(tf) }
+                    }
                     Item { Layout.fillWidth: true }
                     Text { text: selected.candleState; color: FalconTheme.warning; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small }
+                }
+                Text {
+                    visible: selected.chartLoading || selected.chartNote !== ""
+                    text: selected.chartLoading ? ("Loading " + selected.timeframe + "…") : selected.chartNote
+                    color: FalconTheme.textSecondary
+                    font.family: FalconTheme.fontFamily
+                    font.pixelSize: FalconTheme.small
                 }
                 PriceChart {
                     Layout.fillWidth: true
@@ -112,7 +123,26 @@ ColumnLayout {
                 RowLayout {
                     Layout.fillWidth: true
                     spacing: FalconTheme.s8
-                    Badge { text: "WATCH"; fg: FalconTheme.textSecondary }
+                    Rectangle {
+                        Layout.preferredWidth: 110
+                        Layout.preferredHeight: 30
+                        radius: FalconTheme.r6
+                        color: ctrl.watchedKeys.indexOf(selected.key) >= 0 ? "#2a2118" : "transparent"
+                        border.color: ctrl.watchedKeys.indexOf(selected.key) >= 0 ? FalconTheme.accentGold : FalconTheme.borderDefault
+                        Text {
+                            anchors.centerIn: parent
+                            text: ctrl.watchedKeys.indexOf(selected.key) >= 0 ? "WATCHING ✓" : "WATCH"
+                            color: ctrl.watchedKeys.indexOf(selected.key) >= 0 ? FalconTheme.accentGold : FalconTheme.textSecondary
+                            font.family: FalconTheme.fontFamily
+                            font.pixelSize: FalconTheme.small
+                            font.bold: true
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: ctrl.toggleWatch(selected.key)
+                        }
+                    }
                     Badge { text: "PAPER — DISABLED"; fg: FalconTheme.textMuted; opacity: 0.6 }
                     Badge { text: "MANUAL ONLY"; fg: FalconTheme.info }
                 }

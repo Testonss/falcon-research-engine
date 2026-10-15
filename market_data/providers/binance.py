@@ -850,6 +850,12 @@ class BinanceLiveMarketDataProvider(LiveMarketDataProvider):
             bars = bars + [forming]
         return bars
 
+    def supported_timeframes(self):
+        """Native klines exist for all terminal timeframes (public REST)."""
+        # Local copy on purpose: market_data must not import falcon_terminal.
+        # tests/test_terminal_market.py::test_timeframe_sets_match pins equality.
+        return ("1m", "5m", "15m", "1h", "4h", "1D")
+
     def get_health(self) -> Dict[str, Any]:
         self._sm.refresh_stale()
         h = self._sm.health().to_dict()

@@ -106,18 +106,11 @@ def _int_or_none(x: Any) -> Optional[int]:
 # Pool selection (deterministic, documented)
 # --------------------------------------------------------------------------
 
-def select_pool(pairs: List[Dict[str, Any]], mint: str) -> Tuple[Dict[str, Any], str]:
-    """Pick the canonical pool for a mint.
+def _ranked_pairs(pairs: List[Dict[str, Any]], mint: str) -> List[Tuple[tuple, Dict[str, Any]]]:
+    """Rank solana pairs touching `mint` deterministically.
 
-    Policy (deterministic, documented):
-    1. keep only chainId == 'solana' pairs touching the mint as base or quote;
-    2. prefer pairs where the mint is the BASE token (standard orientation);
-    3. among the preferred orientation, rank by (liquidity.usd desc,
-       volume.h24 desc, pairAddress asc);
-    4. the winner is recorded with dex / pool / liquidity / quote.
-
-    Raises NoMarketError when nothing usable exists. Never picks silently
-    by list order: ranking keys are explicit and total.
+    Policy: mint-as-base first, then liquidity.usd desc, volume.h24 desc,
+    pairAddress asc. Shared by select_pool (winner) and pool discovery.
     """
     cands = []
     for p in pairs:
@@ -146,15 +139,38 @@ def select_pool(pairs: List[Dict[str, Any]], mint: str) -> Tuple[Dict[str, Any],
             vol_v = -1.0
         if not math.isfinite(vol_v):
             vol_v = -1.0
-        cands.append((0 if base_addr == mint else 1, -liq_v, -vol_v,
-                      str(p.get("pairAddress", "")), p))
+        cands.append(((0 if base_addr == mint else 1, -liq_v, -vol_v,
+                       str(p.get("pairAddress", ""))), p))
+    cands.sort(key=lambda t: t[0])
+    return cands
+
+
+def rank_pools(pairs: List[Dict[str, Any]], mint: str,
+               limit: int = 8) -> List[Dict[str, Any]]:
+    """Top-N pools for a mint in deterministic rank order (pool discovery)."""
+    return [p for _, p in _ranked_pairs(pairs, mint)[:max(1, limit)]]
+
+
+def select_pool(pairs: List[Dict[str, Any]], mint: str) -> Tuple[Dict[str, Any], str]:
+    """Pick the canonical pool for a mint.
+
+    Policy (deterministic, documented):
+    1. keep only chainId == 'solana' pairs touching the mint as base or quote;
+    2. prefer pairs where the mint is the BASE token (standard orientation);
+    3. among the preferred orientation, rank by (liquidity.usd desc,
+       volume.h24 desc, pairAddress asc);
+    4. the winner is recorded with dex / pool / liquidity / quote.
+
+    Raises NoMarketError when nothing usable exists. Never picks silently
+    by list order: ranking keys are explicit and total.
+    """
+    cands = _ranked_pairs(pairs, mint)
     if not cands:
         raise NoMarketError(f"no solana market found for mint {mint[:8]}...")
-    cands.sort(key=lambda t: (t[0], t[1], t[2], t[3]))
-    winner = cands[0][4]
-    orientation = "base" if cands[0][0] == 0 else "quote"
+    winner = cands[0][1]
+    orientation = "base" if cands[0][0][0] == 0 else "quote"
     reason = (f"selected {winner.get('dexId')}/{winner.get('pairAddress')} "
-              f"(orientation={orientation}, liquidity_usd={cands[0][1] * -1:.2f}) "
+              f"(orientation={orientation}, liquidity_usd={cands[0][0][1] * -1:.2f}) "
               f"among {len(cands)} solana pools")
     return winner, reason
 

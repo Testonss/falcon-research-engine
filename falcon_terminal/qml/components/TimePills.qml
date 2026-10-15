@@ -6,6 +6,7 @@ ColumnLayout {
     property var intervals: ["1m", "5m", "15m", "1h", "4h", "1D"]
     property string active: "1m"
     property var supported: ["1m"]
+    signal pick(string timeframe)
     spacing: FalconTheme.s4
     RowLayout {
         spacing: FalconTheme.s4
@@ -27,6 +28,12 @@ ColumnLayout {
                     font.family: FalconTheme.fontFamily
                     font.pixelSize: FalconTheme.small
                     font.bold: isActive
+                }
+                MouseArea {
+                    anchors.fill: parent
+                    enabled: parent.ok
+                    cursorShape: parent.ok ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                    onClicked: root.pick(modelData)
                 }
             }
         }

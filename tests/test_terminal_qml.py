@@ -392,6 +392,7 @@ class EngineLoadTests(unittest.TestCase):
                                         "perfPanel")),
             "meme": ("MemeRadarPage", ("tokenTablePanel", "tokenPanel",
                                        "whyPanel", "insightPanel")),
+            "assets": ("AssetsPage", ("assetsTablePanel",)),
         }
         for width, height in ((1920, 1080), (1600, 900), (1440, 900), (1366, 768)):
             engine, root, errors = self._load(width, height)

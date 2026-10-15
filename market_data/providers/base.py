@@ -83,6 +83,10 @@ class LiveMarketDataProvider(ABC):
         """
         return []
 
+    def supported_timeframes(self):
+        """Chart timeframes this provider can honestly serve. Default: none."""
+        return ()
+
     # -- dedup / ordering ----------------------------------------------------
     def _is_duplicate(self, event_id: Optional[str]) -> bool:
         if not event_id:

@@ -46,6 +46,18 @@ class AssetSnapshot:
     # Empty when the feed offers no candle history. Forming bars are flagged
     # and must never render as finalized history.
     chart_candles: Tuple[tuple, ...] = ()
+    # Registry identity + view state (functional market surface). All
+    # defaulted so older construction sites keep working unchanged.
+    name: str = ""
+    mint: str = ""
+    chain: str = ""
+    venue: str = ""
+    favorite: bool = False
+    revision: int = 0
+    supported_timeframes: Tuple[str, ...] = ()
+    active_timeframe: str = ""
+    chart_loading: bool = False
+    chart_note: str = ""
 
 
 @dataclass(frozen=True)
@@ -54,3 +66,9 @@ class TerminalSnapshot:
     generated_at: str
     assets: Tuple[AssetSnapshot, ...]
     stopping: bool = False
+    # Ids whose content changed since the previous published snapshot.
+    # Lets consumers touch only moved rows instead of rebuilding tables.
+    changed: Tuple[str, ...] = ()
+    # Ids whose state changed since the previous published snapshot.
+    # Lets consumers touch only moved rows instead of rebuilding tables.
+    changed: Tuple[str, ...] = ()

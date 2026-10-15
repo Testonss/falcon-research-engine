@@ -593,7 +593,7 @@ def main(argv=None):
                    help="Binance spot symbol (default: BTCUSDT)")
     t.add_argument('--mint', default=None,
                    help="Solana token mint address (default: wrapped SOL)")
-    t.add_argument('--page', default="radar", choices=["radar", "signals", "meme"],
+    t.add_argument('--page', default="radar", choices=["radar", "signals", "meme", "assets"],
                    help="initial screen (default: radar)")
     t.add_argument('--ui', default="qml", choices=["qml", "tk"],
                    help="presentation layer (default: qml; tk is the fallback)")

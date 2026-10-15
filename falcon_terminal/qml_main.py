@@ -82,7 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mint", default=None)
     parser.add_argument("--solana-mint", default=None)
     parser.add_argument("--page", default="radar",
-                        choices=("radar", "signals", "meme"))
+                        choices=("radar", "signals", "meme", "assets"))
     parser.add_argument("--poll-interval", type=float, default=15.0)
     return parser
 
@@ -112,6 +112,7 @@ def main(argv=None) -> int:
 
     from falcon_terminal.theme import Theme
     from falcon_terminal.viewmodels import TerminalController
+    from falcon_terminal.store import state_path
 
     if os.environ.get("FALCON_QML_OFFSCREEN", "") == "1":
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -126,7 +127,9 @@ def main(argv=None) -> int:
         logger.warning("screen geometry unavailable (%s); using fallback", exc)
         win_w, win_h, win_x, win_y = 1280, 800, 60, 40
     controller = TerminalController(symbol=args.symbol, solana_mint=mint,
-                                    poll_interval=args.poll_interval)
+                                    poll_interval=args.poll_interval,
+                                    universe=True, track_mints=(mint,),
+                                    store_path=state_path())
     controller.nav.go(args.page)
     engine.rootContext().setContextProperty("FalconTheme", Theme(engine))
     engine.rootContext().setContextProperty("assets", controller.assets)

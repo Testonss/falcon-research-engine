@@ -25,7 +25,6 @@ ApplicationWindow {
         { id: "settings", label: "Settings" }
     ]
     property var placeholderText: {
-        "assets": "Asset book arrives with portfolio tracking.",
         "paper": "Paper sessions arrive with the forward-research engine.",
         "reports": "Campaign reports stay in the Falcon CLI for now.",
         "settings": "Settings arrive with the next terminal milestone."
@@ -81,7 +80,7 @@ ApplicationWindow {
                         color: active ? "#2a2118" : "transparent"
                         border.color: active ? FalconTheme.accentGold : "transparent"
                         border.width: 1
-                        opacity: (modelData.id === "radar" || modelData.id === "signals" || modelData.id === "meme") ? 1.0 : 0.55
+                        opacity: (modelData.id === "radar" || modelData.id === "signals" || modelData.id === "meme" || modelData.id === "assets") ? 1.0 : 0.55
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
                             anchors.left: parent.left
@@ -148,10 +147,11 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.margins: root.pageMargins
-                currentIndex: nav.page === "radar" ? 0 : (nav.page === "signals" ? 1 : (nav.page === "meme" ? 2 : 3))
+                currentIndex: nav.page === "radar" ? 0 : (nav.page === "signals" ? 1 : (nav.page === "meme" ? 2 : (nav.page === "assets" ? 3 : 4)))
                 RadarPage {}
                 SignalsPage {}
                 MemeRadarPage {}
+                AssetsPage {}
                 Panel {
                     objectName: "placeholderPanel"
                     title: "Coming with a later milestone"

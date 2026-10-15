@@ -48,7 +48,7 @@ ColumnLayout {
             ComboBox {
                 id: venueBox
                 Layout.preferredWidth: 170
-                model: ["All (Raydium + Axiom)"]
+                model: ["All venues"].concat(ctrl.assetDexes)
                 font.family: FalconTheme.fontFamily
                 background: Rectangle { color: FalconTheme.bgInput; border.color: FalconTheme.borderDefault; radius: FalconTheme.r6 }
             }
@@ -126,17 +126,35 @@ ColumnLayout {
                 clip: true
                 delegate: Rectangle {
                     visible: provider === "solana"
-                    height: provider === "solana" ? 52 : 0
+                        && (venueBox.currentText === "All venues" || venueBox.currentText === "" || dex === venueBox.currentText)
+                    height: (visible ? 52 : 0)
                     width: tokens.width
                     color: selected.key === key ? FalconTheme.bgSelected : (index % 2 ? FalconTheme.bgPanel : FalconTheme.bgSecondary)
                     border.color: selected.key === key ? FalconTheme.accentGold : "transparent"
                     border.width: 1
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: selected.select(key)
+                    }
                     RowLayout {
                         anchors.fill: parent
                         anchors.leftMargin: FalconTheme.s12
                         anchors.rightMargin: FalconTheme.s12
                         spacing: FalconTheme.s12
-                        Text { text: "☆"; color: FalconTheme.textMuted; font.pixelSize: 14; Layout.preferredWidth: 18 }
+                        Text {
+                            text: favorite ? "★" : "☆"
+                            color: favorite ? FalconTheme.accentGold : FalconTheme.textMuted
+                            font.pixelSize: 14
+                            Layout.preferredWidth: 18
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: function(mouse) {
+                                    mouse.accepted = true
+                                    ctrl.toggleFavorite(key)
+                                }
+                            }
+                        }
                         Text { text: symbol; color: FalconTheme.textPrimary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; font.bold: true; Layout.preferredWidth: 90 }
                         Text { text: "SOL"; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small; Layout.preferredWidth: 40 }
                         Text { text: priceText; color: FalconTheme.textPrimary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; Layout.preferredWidth: 110; horizontalAlignment: Text.AlignRight }
@@ -147,7 +165,6 @@ ColumnLayout {
                         Text { text: "—"; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.body; Layout.preferredWidth: 70; horizontalAlignment: Text.AlignHCenter }
                         Text { text: "UNRANKED"; color: FalconTheme.warning; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.micro; font.bold: true; Layout.preferredWidth: 80; horizontalAlignment: Text.AlignHCenter }
                     }
-                    MouseArea { anchors.fill: parent; onClicked: selected.select(key) }
                 }
                 header: Rectangle {
                     width: tokens.width; height: 30; color: "transparent"
