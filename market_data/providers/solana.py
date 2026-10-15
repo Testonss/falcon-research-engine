@@ -552,6 +552,10 @@ class SolanaDexMarketDataProvider(LiveMarketDataProvider):
         # event. Return None explicitly (no fake depth).
         return None
 
+    def get_liquidity_event(self) -> Optional[MarketLiquidityEvent]:
+        """Expose the latest normalized snapshot without private-state access."""
+        return self._last_event
+
     def get_health(self) -> Dict[str, Any]:
         self._sm.refresh_stale()
         h = self._sm.health().to_dict()

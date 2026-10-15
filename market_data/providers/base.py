@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from market_data.health import ConnectionState, ConnectionStateMachine
+from market_data.normalization import MarketLiquidityEvent
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,18 @@ class LiveMarketDataProvider(ABC):
     def get_health(self) -> Dict[str, Any]:
         self._sm.refresh_stale()
         return self._sm.health().to_dict()
+
+    def get_liquidity_event(self) -> Optional[MarketLiquidityEvent]:
+        """Latest normalized liquidity snapshot, when this source offers one."""
+        return None
+
+    def get_live_candle(self):
+        """Latest live candle (forming preferred, else last closed).
+
+        Returns a Candle or None when this source offers no candle stream.
+        Never synthesizes bars; forming state carries is_closed=False.
+        """
+        return None
 
     # -- dedup / ordering ----------------------------------------------------
     def _is_duplicate(self, event_id: Optional[str]) -> bool:

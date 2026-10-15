@@ -147,6 +147,62 @@ Data-source limitations: aggregation, pool selection and latency differ
 from any single venue display, so Falcon reports its own source honestly —
 exact tick equality with other UIs is not expected.
 
+## Falcon Terminal (experimental)
+
+**EXPERIMENTAL · READ-ONLY · NO LIVE EXECUTION.** A native desktop
+watchlist over Falcon's live public market data. It observes only: no
+signals are generated, no orders exist, no wallet is ever touched.
+
+```bash
+pip install -e ".[terminal]"   # GUI stack is optional (stdlib Tkinter)
+falcon terminal --provider binance --symbol BTCUSDT
+falcon terminal --provider solana --mint <MINT>
+# without install: python -m falcon_terminal --symbol ETHUSDT --mint <MINT>
+```
+
+Requires Python 3.10+ with Tkinter/Tcl-Tk and a desktop display. Windows
+Python installers include an optional Tcl/Tk component; Linux distributions
+typically provide `python3-tk`. No additional Python runtime packages.
+The default watchlist opens Binance BTCUSDT and wrapped SOL on Solana
+(`So11111111111111111111111111111111111111112`). Override with
+`--symbol ETHUSDT --mint <MINT> --poll-interval 15`, or change both targets
+live in the Market Selection panel (previous feeds stop cleanly first).
+
+The native Radar/Market table and selected-asset panel update automatically
+at ~10 Hz while the backend ingests at full feed rate (latest state wins;
+bounded queues, no widget recreation). Binance shows price, 24h change,
+best bid/ask, spread, the current candle (OHLCV with FORMING/CLOSED state)
+and a live price sparkline drawn only from observed prices. Solana shows
+available USD price, pool, liquidity, five-minute volume and buys/sells.
+Missing fields render as `—`. Provider state, stale status, received-message
+count and last receipt time stay visible. Receipt age measures feed activity,
+not the age of each individual quote; identical DexScreener responses can
+keep the feed alive. Signal/Status is deliberately inactive; no execution
+engine is loaded and no buy/sell/order control exists anywhere in the UI.
+
+`falcon_terminal.app` only consumes immutable DTOs through an event bridge.
+`falcon_terminal.bridge` owns providers on a background asyncio thread and
+coalesces snapshots into a bounded latest-value queue. Network bootstrap
+runs after the window opens; providers connect independently. Closing the
+window cancels startup/readers, disconnects providers and waits for pending
+HTTP work while keeping the window responsive. No local server is exposed.
+
+Run offline regression tests with `python -m unittest tests.test_terminal -v`.
+For an **explicit live GUI smoke test** (opens a real window and auto-closes):
+
+```bash
+python scripts/smoke_terminal.py --duration 50 --out reports/terminal-smoke.json
+```
+
+The smoke checks rendered widgets, both feed counters across subsequent
+updates, changing Binance quotes, asset selection, and worker termination.
+It exits nonzero if evidence is insufficient or a feed cannot connect.
+Public endpoints must be reachable. This remains a two-asset watchlist,
+not automatic token discovery or ranking; Solana uses aggregated polling
+(15 seconds by default), not a trade stream. No signal calculation,
+paper portfolio, persistence or packaged desktop installer in this prototype.
+Release tag `v0.1.0` and release notes remain unchanged.
+
 ## Research pipeline
 
 1. **Generate** — deterministic random/grid/perturbation search over explicit

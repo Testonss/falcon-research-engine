@@ -141,8 +141,18 @@ def parse_ticker_24hr(payload: Dict[str, Any]) -> Optional[Ticker]:
             falcon = to_falcon_symbol(str(raw_sym))
         except ValueError:
             return None
+        change_pct = None
+        if "priceChangePercent" in payload:
+            try:
+                change_pct = float(payload.get("priceChangePercent"))
+                import math
+                if not math.isfinite(change_pct):
+                    change_pct = None
+            except (TypeError, ValueError):
+                change_pct = None
         return Ticker(symbol=falcon, price=price, volume=vol, timestamp=ts,
-                      event_id=f"binance:24hr:{raw_sym}:{payload.get('closeTime')}")
+                      event_id=f"binance:24hr:{raw_sym}:{payload.get('closeTime')}",
+                      change_pct_24h=change_pct)
     except (AttributeError, TypeError):
         return None
 
@@ -715,6 +725,10 @@ class BinanceLiveMarketDataProvider(LiveMarketDataProvider):
             logger.warning("binance ws handle failed: %s", e)
 
     # -- ingest ----------------------------------------------------------------------
+    def _known_change_pct(self) -> Optional[float]:
+        prev = self._last_ticker
+        return prev.change_pct_24h if prev is not None else None
+
     def _apply_kline(self, p: Dict[str, Any]):
         sym, iv = p["symbol"], p["interval"] or self.interval
         ot: datetime = p["open_time"]
@@ -735,7 +749,8 @@ class BinanceLiveMarketDataProvider(LiveMarketDataProvider):
             if len(self._candles) > 5000:
                 self._candles = self._candles[-5000:]
             self._last_ticker = Ticker(symbol=sym, price=p["close"], volume=p["volume"],
-                                       timestamp=p.get("close_time") or ot, event_id=event_id)
+                                       timestamp=p.get("close_time") or ot, event_id=event_id,
+                                       change_pct_24h=self._known_change_pct())
             self._note_accepted()
         else:
             # Forming update: mutate in place, never append a new bar.
@@ -761,7 +776,8 @@ class BinanceLiveMarketDataProvider(LiveMarketDataProvider):
                     p["open"], p["high"], p["low"], p["close"], p["volume"])
             state.updates += 1
             self._last_ticker = Ticker(symbol=sym, price=p["close"], volume=p["volume"],
-                                       timestamp=ot, event_id=None)
+                                       timestamp=ot, event_id=None,
+                                       change_pct_24h=self._known_change_pct())
             self._note_accepted()
 
     def _apply_book_ticker(self, p: Dict[str, Any]):
@@ -784,7 +800,8 @@ class BinanceLiveMarketDataProvider(LiveMarketDataProvider):
         if self._is_out_of_order(key, p["event_time"]):
             return
         self._last_ticker = Ticker(symbol=sym, price=p["price"], volume=0.0,
-                                   timestamp=p["event_time"], event_id=None)
+                                   timestamp=p["event_time"], event_id=None,
+                                   change_pct_24h=self._known_change_pct())
         self._note_accepted()
 
     def _apply_trade(self, p: Dict[str, Any]):
@@ -794,7 +811,8 @@ class BinanceLiveMarketDataProvider(LiveMarketDataProvider):
         self._last_trade = dict(p)
         self._last_ticker = Ticker(symbol=p["symbol"], price=p["price"],
                                    volume=p["quantity"], timestamp=p["event_time"],
-                                   event_id=None)
+                                   event_id=None,
+                                   change_pct_24h=self._known_change_pct())
         self._note_accepted()
 
     # -- MarketDataSource surface -------------------------------------------------------
@@ -816,6 +834,13 @@ class BinanceLiveMarketDataProvider(LiveMarketDataProvider):
     def forming_candle(self) -> Optional[Candle]:
         state = self._forming.get((self.falcon_symbol, self.interval))
         return state.candle if state else None
+
+    def get_live_candle(self) -> Optional[Candle]:
+        """Newest live bar: the forming candle when one exists, else last closed."""
+        forming = self.forming_candle()
+        if forming is not None:
+            return forming
+        return self._candles[-1] if self._candles else None
 
     def get_health(self) -> Dict[str, Any]:
         self._sm.refresh_stale()

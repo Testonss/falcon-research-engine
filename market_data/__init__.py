@@ -27,6 +27,9 @@ class Ticker:
     volume: float
     timestamp: datetime
     event_id: Optional[str] = None
+    # Optional 24h change in percent (e.g. Binance 24hr "priceChangePercent").
+    # None when the source does not legitimately provide it; never synthesized.
+    change_pct_24h: Optional[float] = None
 
 
 @dataclass

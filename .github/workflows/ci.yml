@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Compile check (stdlib only)
-        run: python -m compileall -q config market_data exchange strategy execution risk portfolio backtest paper bot_logging metrics evaluation research scripts tests main.py
+        run: python -m compileall -q config market_data exchange strategy execution risk portfolio backtest paper bot_logging metrics evaluation research scripts falcon_terminal tests main.py
       - name: Full test suite
         run: python -m unittest discover -s tests -v
       - name: CLI smoke test
@@ -28,6 +28,8 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install .
           falcon --help
+          falcon-terminal --help
+          falcon terminal --help
           python -c "import backtest, evaluation, research.campaign, research.store, scripts.falcon; print('imports ok')"
       - name: No-secrets scan
         shell: bash

@@ -470,6 +470,25 @@ def cmd_dataset_inspect(args):
     return 0
 
 
+def cmd_terminal(args):
+    """Launch the native read-only terminal. GUI imports stay local so
+    `falcon --help` works without any graphical stack installed."""
+    try:
+        from falcon_terminal.__main__ import main as terminal_main
+    except ImportError as e:
+        die(f"terminal unavailable: {e}")
+    argv = []
+    if args.provider:
+        argv += ["--provider", args.provider]
+    if args.symbol:
+        argv += ["--symbol", args.symbol]
+    if args.mint:
+        argv += ["--mint", args.mint]
+    if args.poll_interval != 15.0:
+        argv += ["--poll-interval", str(args.poll_interval)]
+    return terminal_main(argv)
+
+
 def add_data_args(ap):
     ap.add_argument('--data', nargs='+', default=['data/sample_ohlcv*.csv'])
     ap.add_argument('--symbol', default='BTC/USDT')
@@ -563,6 +582,17 @@ def main(argv=None):
     lv.add_argument('--record', default=None,
                     help="append normalized events as JSONL to this path")
     lv.set_defaults(fn=cmd_live)
+
+    t = sub.add_parser("terminal", help="open the native read-only market terminal")
+    t.add_argument('--provider', default="both", choices=["both", "binance", "solana"],
+                   help="initial watchlist scope (default: both)")
+    t.add_argument('--symbol', default="BTCUSDT",
+                   help="Binance spot symbol (default: BTCUSDT)")
+    t.add_argument('--mint', default=None,
+                   help="Solana token mint address (default: wrapped SOL)")
+    t.add_argument('--poll-interval', type=float, default=15.0,
+                   help="Solana poll seconds (default: 15)")
+    t.set_defaults(fn=cmd_terminal)
 
     d = sub.add_parser("dataset", help="inspect dataset files and manifests")
     dsub = d.add_subparsers(dest="dataset_cmd", required=True)

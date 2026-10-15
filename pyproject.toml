@@ -21,16 +21,18 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = []
+terminal = []
 
 [tool.setuptools]
 packages = [
     "backtest", "bot_logging", "config", "evaluation", "exchange",
     "execution", "market_data", "market_data.providers", "metrics", "paper", "portfolio",
-    "research", "risk", "strategy", "scripts",
+    "research", "risk", "strategy", "scripts", "falcon_terminal",
 ]
 
 [project.scripts]
 falcon = "scripts.falcon:main"
+falcon-terminal = "falcon_terminal.__main__:main"
 
 [tool.setuptools.package-data]
 "*" = ["*.md"]
