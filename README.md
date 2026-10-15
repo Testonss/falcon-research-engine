@@ -117,6 +117,36 @@ falcon research --data "data/falcon-*1h.manifest.json" \
 > Glob patterns above stay quoted so Python (not the shell) expands them
 > deterministically via `market_data.load_ohlcv_dataset` on all platforms.
 
+## Live market data
+
+Falcon supports live **public market data** (read-only — no trading anywhere):
+
+```bash
+falcon live --provider binance --symbol BTCUSDT --interval 1m --duration 20
+falcon live --provider solana --mint <MINT_ADDRESS> --duration 20
+```
+
+- **Binance requires no API key.** REST bootstrap (recent klines, 24h
+  ticker, best bid/ask) plus public WebSocket streams (kline, bookTicker,
+  miniTicker). Forming vs closed klines are distinguished explicitly
+  (`Candle.is_closed`); forming bars never enter finalized history.
+- **Solana uses mint-address identity.** Copy a token mint from anywhere
+  (e.g. a token you discovered on Axiom) and Falcon independently resolves
+  the on-chain market via documented public infrastructure (DexScreener
+  public token API by default, no key; optional `FALCON_SOLANA_RPC_URL`
+  for decimals enrichment). Axiom compatibility is independence: no Axiom
+  account, no scraping, no private Axiom endpoints, no wallet, no signing,
+  no swaps.
+- Unknown metrics report as `unavailable` (never `0` unless measured).
+- Pool selection is deterministic: strongest-liquidity Solana pool wins,
+  ties break by volume then address; the selected DEX/pool/quote is shown.
+- Best-book only: neither provider claims a full L2 order book (Binance
+  exposes best bid/ask snapshots; Solana exposes pool liquidity).
+
+Data-source limitations: aggregation, pool selection and latency differ
+from any single venue display, so Falcon reports its own source honestly —
+exact tick equality with other UIs is not expected.
+
 ## Research pipeline
 
 1. **Generate** — deterministic random/grid/perturbation search over explicit

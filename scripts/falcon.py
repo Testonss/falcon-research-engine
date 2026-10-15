@@ -332,6 +332,110 @@ def cmd_status(args):
     return 0
 
 
+def cmd_live(args):
+    """Live public market data (read-only). No trading, no wallets, no keys."""
+    import time as _time
+    provider_name = (args.provider or "binance").lower()
+    interval = args.interval or "1m"
+    stale_after = float(args.stale_timeout or 30.0)
+    duration = args.duration  # None = run until Ctrl+C
+
+    async def _run():
+        from market_data.providers.binance import BinanceLiveMarketDataProvider
+        from market_data.providers.solana import SolanaDexMarketDataProvider
+        rec = None
+        if provider_name == "binance":
+            if not args.symbol:
+                die("falcon live --provider binance requires --symbol (e.g. BTCUSDT)")
+            prov = BinanceLiveMarketDataProvider(
+                symbol=args.symbol, interval=interval, stale_after_s=stale_after)
+        elif provider_name == "solana":
+            if not args.mint:
+                die("falcon live --provider solana requires --mint <MINT_ADDRESS>")
+            prov = SolanaDexMarketDataProvider(
+                args.mint, stale_after_s=max(stale_after, 45.0))
+        else:
+            die(f"unknown provider: {provider_name} (choose binance|solana)")
+        if args.record:
+            from market_data.recording import LiveEventRecorder
+            rec = LiveEventRecorder(args.record)
+        try:
+            await prov.connect()
+        except Exception as e:
+            print(f"falcon: error: live connect failed: {e}", file=sys.stderr)
+            return 1
+        t0 = _time.monotonic()
+        try:
+            while True:
+                if duration is not None and (_time.monotonic() - t0) >= duration:
+                    break
+                h = prov.get_health()
+                if provider_name == "binance":
+                    tick = await prov.get_ticker()
+                    ob = await prov.get_order_book()
+                    bars = await prov.get_candles(limit=2)
+                    price = tick.price if tick else None
+                    bid = ob.best_bid() if ob else None
+                    ask = ob.best_ask() if ob else None
+                    spread = ob.spread_pct() if ob else None
+                    forming = prov.forming_candle()
+                    last_closed = bars[-1] if bars else None
+                    def _f(x):
+                        return f"{x:.2f}" if isinstance(x, (int, float)) and x else "unavailable"
+                    print(f"Falcon Live provider=binance instrument={prov.falcon_symbol} "
+                          f"price={_f(price)} bid={_f(bid)} ask={_f(ask)} "
+                          f"spread={f'{spread*100:.3f}%' if spread else 'unavailable'} "
+                          f"last_candle={last_closed.close if last_closed else 'unavailable'} "
+                          f"candle_closed={'yes' if (last_closed and last_closed.is_closed) else 'no'} "
+                          f"forming={'yes' if forming else 'no'} "
+                          f"connected={'yes' if h.get('connected') else 'no'} "
+                          f"stale={'yes' if h.get('stale') else 'no'} "
+                          f"reconnects={h.get('reconnects', 0)}", flush=True)
+                    if rec is not None and tick is not None:
+                        rec.record("binance", prov.falcon_symbol, "ticker",
+                                   tick.timestamp, tick.event_id,
+                                   {"price": tick.price, "bid": bid, "ask": ask})
+                else:
+                    ev = prov._last_event
+                    def _v(x):
+                        return f"{x}" if x is not None else "unavailable"
+                    print(f"Falcon Live provider=solana symbol={_v(prov._symbol)} "
+                          f"mint={prov.mint[:8]}... price_usd={_v(ev.price_usd if ev else None)} "
+                          f"price_sol={_v(ev.price_native if ev else None)} "
+                          f"liquidity={_v(ev.liquidity_usd if ev else None)} "
+                          f"market_cap={_v(ev.market_cap if ev else None)} "
+                          f"volume_5m={_v(ev.volume_5m if ev else None)} "
+                          f"buys_5m={_v(ev.buys_5m if ev else None)} "
+                          f"sells_5m={_v(ev.sells_5m if ev else None)} "
+                          f"dex={_v(ev.dex if ev else None)} pool={_v((ev.pool_address[:8] + '...') if ev and ev.pool_address else None)} "
+                          f"connected={'yes' if h.get('connected') else 'no'} "
+                          f"stale={'yes' if h.get('stale') else 'no'}", flush=True)
+                    if rec is not None and ev is not None:
+                        rec.record("solana", f"solana:{prov.mint}", "liquidity",
+                                   ev.event_time, ev.event_id,
+                                   {"price_usd": ev.price_usd,
+                                    "liquidity_usd": ev.liquidity_usd})
+                await asyncio.sleep(2.0)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            try:
+                await prov.disconnect()
+            except Exception:
+                pass
+            if rec is not None:
+                rec.close()
+        print("falcon live: stopped cleanly")
+        return 0
+
+    try:
+        return asyncio.run(_run())
+    except KeyboardInterrupt:
+        # Ctrl+C is a normal stop: no traceback, terminal control returned.
+        print("falcon live: stopped cleanly")
+        return 0
+
+
 def cmd_dataset_inspect(args):
     from research.datafiles import load_versioned_dataset
     from research.regimes import regime_distribution
@@ -442,6 +546,23 @@ def main(argv=None):
     s = sub.add_parser("status", help="show research database summary")
     s.add_argument('--db', default="falcon.db")
     s.set_defaults(fn=cmd_status)
+
+    lv = sub.add_parser("live", help="live public market data (read-only, no trading)")
+    lv.add_argument('--provider', default="binance", choices=["binance", "solana"],
+                    help="live data provider (default: binance)")
+    lv.add_argument('--symbol', default="BTCUSDT",
+                    help="CEX symbol, e.g. BTCUSDT or BTC/USDT (binance only)")
+    lv.add_argument('--mint', default=None,
+                    help="Solana token mint address (solana only)")
+    lv.add_argument('--interval', default="1m",
+                    help="candle interval for binance klines (default: 1m)")
+    lv.add_argument('--duration', type=float, default=None,
+                    help="run seconds then exit cleanly (default: run until Ctrl+C)")
+    lv.add_argument('--stale-timeout', type=float, default=30.0,
+                    help="seconds without messages before feed reports stale")
+    lv.add_argument('--record', default=None,
+                    help="append normalized events as JSONL to this path")
+    lv.set_defaults(fn=cmd_live)
 
     d = sub.add_parser("dataset", help="inspect dataset files and manifests")
     dsub = d.add_subparsers(dest="dataset_cmd", required=True)

@@ -85,6 +85,12 @@ class Candle:
     timestamp: datetime
     interval: str  # e.g. '1m', '5m', '1h'
     event_id: Optional[str] = None
+    # Live kline semantics (backward compatible: historical bars are closed).
+    # A forming candle (is_closed=False) is a provisional in-progress bar and
+    # MUST NOT be treated as finalized history (no look-ahead).
+    is_closed: bool = True
+    open_time: Optional[datetime] = None
+    close_time: Optional[datetime] = None
 
 
 class MarketDataSource(ABC):
@@ -100,6 +106,10 @@ class MarketDataSource(ABC):
     async def get_order_book(self, symbol: str, depth: int = 10) -> Optional[OrderBook]: ...
     @abstractmethod
     async def get_candles(self, symbol: str, interval: str, limit: int = 100) -> List[Candle]: ...
+
+    def get_health(self) -> Dict[str, Any]:
+        """Provider health snapshot (may be overridden by live providers)."""
+        return {'provider': 'unknown', 'connected': False, 'stale': False}
 
 
 class MarketDataHandler(MarketDataSource):
@@ -323,6 +333,22 @@ class MarketDataHandler(MarketDataSource):
             'out_of_order_dropped': self.out_of_order_dropped,
             'reconnects': self.reconnects,
             'seen_ids': len(self._seen_event_ids),
+        }
+
+    def get_health(self) -> Dict[str, Any]:
+        """Health snapshot in the shared provider-health schema."""
+        return {
+            'provider': 'csv-handler',
+            'connected': bool(self.is_connected),
+            'stale': False,
+            'state': 'CONNECTED' if self.is_connected else 'DISCONNECTED',
+            'last_message_at': None,
+            'seconds_since_message': None,
+            'reconnects': self.reconnects,
+            'messages_received': self.messages_handled,
+            'duplicates_dropped': self.duplicates_dropped,
+            'out_of_order_dropped': self.out_of_order_dropped,
+            'rejected': 0,
         }
 
 
