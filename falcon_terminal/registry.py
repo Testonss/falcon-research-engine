@@ -55,6 +55,36 @@ def solana_pool_id(mint: str, dex: str, pool: str) -> str:
     return f"solana:{m}:{d}:{p}"
 
 
+def mt5_id(server: str, symbol: str) -> str:
+    """Canonical id for an MT5 broker instrument.
+
+    Form: ``mt5:<server>:<exact_symbol>`` — e.g.
+    ``mt5:MetaQuotes-Demo:EURUSD`` or ``mt5:Broker-Demo:EURUSD.a``.
+
+    Broker suffixes (``.a``, ``.m``, ``_ECN`` …) are significant and never
+    stripped: different suffixed symbols are different instruments.
+    Server and symbol are stored verbatim except surrounding whitespace.
+    Neither may be empty nor contain ':'.
+    """
+    srv = (server or "").strip()
+    sym = (symbol or "").strip()
+    if not srv or not sym:
+        raise ValueError(f"invalid mt5 identity: {(server, symbol)!r}")
+    if ":" in srv or ":" in sym:
+        raise ValueError(f"invalid mt5 identity (':' not allowed): {(server, symbol)!r}")
+    return f"mt5:{srv}:{sym}"
+
+
+def parse_mt5_id(cid: str) -> Dict[str, Optional[str]]:
+    """Split an ``mt5:<server>:<symbol>`` id. Raises ValueError otherwise."""
+    if not isinstance(cid, str) or not cid.startswith("mt5:"):
+        raise ValueError(f"invalid mt5 canonical id: {cid!r}")
+    parts = cid.split(":")
+    if len(parts) != 3 or not all(p for p in parts):
+        raise ValueError(f"invalid mt5 canonical id: {cid!r}")
+    return {"provider": "mt5", "server": parts[1], "symbol": parts[2]}
+
+
 def parse_canonical_id(cid: str) -> Dict[str, Optional[str]]:
     """Split a canonical id into {provider, venue, ref, pool}.
 
@@ -73,6 +103,10 @@ def parse_canonical_id(cid: str) -> Dict[str, Optional[str]]:
             return {"provider": "solana", "venue": "", "ref": parts[1], "pool": None}
         return {"provider": "solana", "venue": parts[2], "ref": parts[1],
                 "pool": parts[3]}
+    if provider == "mt5" and len(parts) == 3:
+        # mt5:<server>:<exact_symbol> — server is the venue context.
+        return {"provider": "mt5", "venue": parts[1], "ref": parts[2],
+                "pool": None, "server": parts[1], "symbol": parts[2]}
     raise ValueError(f"unsupported canonical id: {cid!r}")
 
 

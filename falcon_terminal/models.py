@@ -1,6 +1,41 @@
 """Immutable messages crossing the backend / desktop boundary."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Tuple
+
+
+@dataclass(frozen=True)
+class MT5AccountSnapshot:
+    """MT5 demo account display state. Never carries secrets."""
+    state: str = "DISCONNECTED"      # DISCONNECTED/CONNECTING/CONNECTED_DEMO/...
+    server: str = ""
+    login: str = ""
+    mode_name: str = ""              # DEMO / REAL / CONTEST / UNKNOWN
+    demo: bool = False
+    execution_enabled: bool = False
+    message: str = "MT5 integration disabled"
+    balance: Optional[float] = None
+    equity: Optional[float] = None
+    margin: Optional[float] = None
+    margin_free: Optional[float] = None
+    profit: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class MT5PositionSnapshot:
+    """One actual MT5 terminal position (terminal is authoritative)."""
+    ticket: int = 0
+    symbol: str = ""
+    canonical_id: str = ""
+    side: str = ""                   # BUY | SELL
+    volume: float = 0.0
+    entry: float = 0.0
+    current: Optional[float] = None
+    sl: Optional[float] = None
+    tp: Optional[float] = None
+    profit: Optional[float] = None
+    swap: Optional[float] = None
+    comment: str = ""
+    open_time: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -69,3 +104,6 @@ class TerminalSnapshot:
     # Ids whose content changed since the previous published snapshot.
     # Lets consumers touch only moved rows instead of rebuilding tables.
     changed: Tuple[str, ...] = ()
+    # MT5 demo surface (defaulted so older construction sites keep working).
+    mt5_account: MT5AccountSnapshot = field(default_factory=MT5AccountSnapshot)
+    mt5_positions: Tuple[MT5PositionSnapshot, ...] = ()

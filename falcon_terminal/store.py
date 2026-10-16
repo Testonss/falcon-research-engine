@@ -37,6 +37,12 @@ class LocalStore:
         self.favorites: List[str] = []
         self.recent: List[str] = []
         self.selected: str = ""
+        # MT5 demo settings (no passwords ever persisted here).
+        self.mt5_enabled: bool = False
+        self.mt5_terminal_path: str = ""
+        self.mt5_sync_interval: float = 5.0
+        self.mt5_default_volume: float = 0.01
+        self.mt5_max_risk: float = 100.0
         self.load()
 
     # -- persistence ---------------------------------------------------------
@@ -61,6 +67,24 @@ class LocalStore:
             self.recent = [str(x) for x in rec if isinstance(x, str)][:MAX_RECENT]
         sel = data.get("selected", "")
         self.selected = sel if isinstance(sel, str) else ""
+        # MT5 demo settings (validated ranges; passwords never accepted).
+        try:
+            self.mt5_enabled = bool(data.get("mt5_enabled", False))
+        except Exception:
+            self.mt5_enabled = False
+        tp = data.get("mt5_terminal_path", "")
+        self.mt5_terminal_path = tp if isinstance(tp, str) else ""
+        for key, lo, hi, default in (
+                ("mt5_sync_interval", 2.0, 60.0, 5.0),
+                ("mt5_default_volume", 0.01, 100.0, 0.01),
+                ("mt5_max_risk", 1.0, 100000.0, 100.0)):
+            try:
+                v = float(data.get(key, default))
+                if not (lo <= v <= hi):
+                    raise ValueError("range")
+                setattr(self, key, v)
+            except (TypeError, ValueError):
+                setattr(self, key, default)
 
     def save(self) -> None:
         if self.path is None:
@@ -72,7 +96,13 @@ class LocalStore:
                 "favorites": self.favorites,
                 "recent": self.recent,
                 "selected": self.selected,
+                "mt5_enabled": self.mt5_enabled,
+                "mt5_terminal_path": self.mt5_terminal_path,
+                "mt5_sync_interval": self.mt5_sync_interval,
+                "mt5_default_volume": self.mt5_default_volume,
+                "mt5_max_risk": self.mt5_max_risk,
             }, indent=1), encoding="utf-8")
+            os.replace(tmp, self.path)
             os.replace(tmp, self.path)
         except OSError as e:
             logger.warning("terminal state save failed (%s)", e)
@@ -105,4 +135,9 @@ class LocalStore:
 
     def to_dict(self) -> Dict[str, object]:
         return {"favorites": list(self.favorites), "recent": list(self.recent),
-                "selected": self.selected}
+                "selected": self.selected,
+                "mt5_enabled": self.mt5_enabled,
+                "mt5_terminal_path": self.mt5_terminal_path,
+                "mt5_sync_interval": self.mt5_sync_interval,
+                "mt5_default_volume": self.mt5_default_volume,
+                "mt5_max_risk": self.mt5_max_risk}

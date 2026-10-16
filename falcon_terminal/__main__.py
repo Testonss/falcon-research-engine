@@ -13,7 +13,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ui", default="qml", choices=("qml", "tk"),
                         help="presentation layer (default: qml; tk is the fallback)")
     parser.add_argument("--provider", default="both",
-                        choices=("both", "binance", "solana"),
+                        choices=("both", "binance", "solana", "mt5"),
                         help="initial watchlist scope (default: both)")
     parser.add_argument("--symbol", default="BTCUSDT",
                         help="Binance spot symbol (default BTCUSDT)")
@@ -21,6 +21,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Solana token mint (default: wrapped SOL)")
     parser.add_argument("--solana-mint", default=None,
                         help="alias of --mint (kept for compatibility)")
+    parser.add_argument("--mt5", action="store_true",
+                        help="enable MT5 DEMO integration (demo only; real blocked)")
+    parser.add_argument("--mt5-path", default=None,
+                        help="optional MT5 terminal path (default: attach to running terminal)")
     parser.add_argument("--page", default="radar",
                         choices=("radar", "signals", "meme", "assets"))
     parser.add_argument("--poll-interval", type=float, default=15.0,
@@ -51,6 +55,10 @@ def _run_qml(parser, args):
     mint = args.mint or args.solana_mint
     if mint:
         passthrough += ["--mint", mint]
+    if args.mt5 or args.provider == "mt5":
+        passthrough += ["--mt5"]
+    if args.mt5_path:
+        passthrough += ["--mt5-path", args.mt5_path]
     return qml_main(passthrough)
 
 

@@ -143,7 +143,12 @@ class TerminalBridge:
                  tickers_fetcher=None,
                  history_fetcher=None,
                  binance_provider_factory=None,
-                 solana_provider_factory=None):
+                 solana_provider_factory=None,
+                 mt5_enabled: bool = False,
+                 mt5_provider_factory=None,
+                 mt5_connection_factory=None,
+                 mt5_exec_factory=None,
+                 mt5_sync_s: float = 5.0):
         for name, value in (("poll_interval", poll_interval),
                             ("refresh_interval", refresh_interval),
                             ("retry_interval", retry_interval)):
@@ -163,6 +168,18 @@ class TerminalBridge:
         self._history_fetcher = history_fetcher or disc.fetch_klines
         self._binance_factory = binance_provider_factory
         self._solana_factory = solana_provider_factory
+        # MT5 demo surface (optional; off by default, lazy imports only).
+        self._mt5_enabled = bool(mt5_enabled)
+        self._mt5_factory = mt5_provider_factory
+        self._mt5_conn_factory = mt5_connection_factory
+        self._mt5_exec_factory = mt5_exec_factory
+        self._mt5_sync_s = max(2.0, float(mt5_sync_s or 5.0))
+        self._mt5_provider = None
+        self._mt5_conn = None
+        self._mt5_exec = None
+        self._mt5_account = None  # MT5AccountSnapshot (models)
+        self._mt5_positions: Tuple = ()
+        self._mt5_last_sync = 0.0
         self._injected = dict(providers) if providers is not None else None
         self._events: queue.Queue[TerminalSnapshot] = queue.Queue(maxsize=1)
         self._requested_stop = threading.Event()
@@ -281,13 +298,16 @@ class TerminalBridge:
     # -- snapshots ---------------------------------------------------------------
     def _publish(self, stopping: bool = False) -> None:
         from falcon_terminal import perf as _perf
+        from falcon_terminal.models import MT5AccountSnapshot as _MT5Acc
         t0 = _perf.now()
         self._sequence += 1
         rows = tuple(self._row_snapshot(cid) for cid in self._registry.ids())
         changed = tuple(self._registry.drain_dirty())
+        acc = self._mt5_account if self._mt5_account is not None else _MT5Acc()
         message = TerminalSnapshot(
             self._sequence, datetime.now(timezone.utc).isoformat(),
-            rows, stopping, changed)
+            rows, stopping, changed,
+            mt5_account=acc, mt5_positions=tuple(self._mt5_positions))
         try:
             self._events.get_nowait()
         except queue.Empty:
@@ -431,8 +451,8 @@ class TerminalBridge:
                         key, state="ERROR", connected=False, error=str(exc))
                 self._registry.apply_health(key, source=source)
             self._full_binance_id = binance_id(self._symbol)
+            self._maybe_init_mt5()
             return
-        # Universe mode: full provider for the initial symbol + tracked mints.
         try:
             cid = binance_id(self._symbol)
             self._providers[cid] = self._new_binance_provider(self._symbol)
@@ -446,6 +466,26 @@ class TerminalBridge:
                 cid, state="ERROR", connected=False, error=str(exc))
         for mint in [self._solana_mint, *self._track_mints]:
             self._track_mint_sync(mint)
+        self._maybe_init_mt5()
+
+    def _maybe_init_mt5(self):
+        if not self._mt5_enabled:
+            return
+        try:
+            self._mt5_conn = self._new_mt5_connection()
+        except Exception as exc:
+            logger.warning("mt5 connection init failed: %s", exc)
+            return
+        try:
+            self._mt5_provider = self._new_mt5_provider()
+        except Exception as exc:
+            logger.warning("mt5 provider init failed: %s", exc)
+            return
+        try:
+            server = getattr(self._mt5_provider, "server", "") or ""
+            self._mt5_exec = self._new_mt5_exec(None, server)
+        except Exception as exc:
+            logger.debug("mt5 exec init deferred: %s", exc)
 
     @staticmethod
     def _stub_provider(name: str):
@@ -454,7 +494,7 @@ class TerminalBridge:
             provider_name = name
 
             def supported_timeframes(self):
-                return TIMEFRAMES if name == "binance" else ()
+                return TIMEFRAMES if name in ("binance", "mt5") else ()
         return _P()
 
     def _register_binance(self, cid: str, raw_symbol: str) -> None:
@@ -467,6 +507,212 @@ class TerminalBridge:
         self._registry.register(CanonicalAsset(
             id=cid, provider="binance", venue="spot", chain="",
             symbol=display, quote=quote, supported=TIMEFRAMES))
+        return
+
+    def _new_mt5_provider(self):
+        if self._mt5_factory is not None:
+            return self._mt5_factory()
+        from market_data.providers.mt5 import MT5LiveMarketDataProvider
+        return MT5LiveMarketDataProvider(poll_interval_s=self._mt5_sync_s)
+
+    def _new_mt5_connection(self):
+        if self._mt5_conn_factory is not None:
+            return self._mt5_conn_factory()
+        from falcon_terminal.mt5_connection import MT5ConnectionManager
+        return MT5ConnectionManager(stale_after_s=30.0)
+
+    def _new_mt5_exec(self, mt5_module=None, server=""):
+        if self._mt5_exec_factory is not None:
+            try:
+                return self._mt5_exec_factory(mt5_module, server)
+            except TypeError:
+                return self._mt5_exec_factory()
+        from execution.mt5_demo import DemoExecutionAdapter
+        return DemoExecutionAdapter(mt5_module=mt5_module, server=server)
+
+    def _register_mt5_catalog(self):
+        prov = self._mt5_provider
+        if prov is None:
+            return
+        try:
+            symbols = list(getattr(prov, "symbols", []) or [])
+        except Exception:
+            symbols = []
+        server = getattr(prov, "server_actual", "") or getattr(prov, "server", "") or "unknown"
+        try:
+            from falcon_terminal.registry import mt5_id as _mt5_id
+        except Exception:
+            return
+        for meta in symbols:
+            try:
+                sym = getattr(meta, "symbol", "") if not isinstance(meta, dict) else meta.get("symbol", "")
+                if not sym:
+                    continue
+                cid = _mt5_id(server, sym)
+                desc = getattr(meta, "description", "") if not isinstance(meta, dict) else meta.get("description", "")
+                base = getattr(meta, "currency_base", "") if not isinstance(meta, dict) else meta.get("currency_base", "")
+                profit = getattr(meta, "currency_profit", "") if not isinstance(meta, dict) else meta.get("currency_profit", "")
+                self._registry.register(CanonicalAsset(
+                    id=cid, provider="mt5", venue=server, chain="",
+                    symbol=str(sym), name=str(desc or ""), mint=None,
+                    quote=str(profit or base or ""), supported=TIMEFRAMES),
+                    strict=False)
+                self._registry.apply_health(cid, source=f"MT5 - {server}")
+            except Exception:
+                continue
+
+    def _sync_mt5_ticks(self):
+        prov = self._mt5_provider
+        if prov is None:
+            return
+        try:
+            ticks = dict(getattr(prov, "_ticks", {}) or {})
+        except Exception:
+            return
+        if not ticks:
+            return
+        from datetime import datetime as _dt, timezone as _tz
+        now_iso = _dt.now(_tz.utc).isoformat()
+        server = getattr(prov, "server_actual", "") or getattr(prov, "server", "") or ""
+        try:
+            from falcon_terminal.registry import mt5_id as _mt5_id
+        except Exception:
+            return
+        for sym, tick in ticks.items():
+            try:
+                cid = _mt5_id(server or "unknown", sym)
+            except ValueError:
+                continue
+            if self._registry.get(cid) is None:
+                continue
+            try:
+                bid = tick.get("bid")
+                ask = tick.get("ask")
+                last = tick.get("last") or ask or bid
+                et = tick.get("event_time")
+                base = et.isoformat() if hasattr(et, "isoformat") else str(et)
+                eid = f"mt5:tick:{sym}:{base}"
+                if last:
+                    self._registry.apply_quote(cid, price=float(last), event_time=et, event_id=eid)
+                self._registry.apply_book(cid, bid=bid, ask=ask, event_time=et, event_id=eid + ":book")
+                h = prov.get_health() if hasattr(prov, "get_health") else {}
+                self._registry.apply_health(cid, state=str(h.get("state", "CONNECTED")),
+                    connected=bool(h.get("connected", True)), stale=bool(h.get("stale", False)),
+                    messages=int(h.get("messages_received", 0) or 0),
+                    source=f"MT5 - {server}", observed_at=now_iso, age_s=0.0)
+            except Exception:
+                continue
+
+    def _sync_mt5_account(self):
+        from falcon_terminal.models import MT5AccountSnapshot as _MT5Acc
+        from falcon_terminal.models import MT5PositionSnapshot as _MT5Pos
+        conn = self._mt5_conn
+        if conn is None:
+            return
+        try:
+            snap = conn.refresh()
+        except Exception as e:
+            logger.debug("mt5 account refresh: %s", e)
+            return
+        self._mt5_account = _MT5Acc(state=snap.state, server=snap.server, login=snap.login,
+            mode_name=snap.mode_name, demo=snap.demo, execution_enabled=snap.execution_enabled,
+            message=snap.message, balance=snap.balance, equity=snap.equity,
+            margin=snap.margin, margin_free=snap.margin_free, profit=snap.profit)
+        exec_ad = self._mt5_exec
+        if exec_ad is None:
+            self._mt5_positions = ()
+            return
+        try:
+            positions = exec_ad.get_positions()
+        except Exception as e:
+            logger.debug("mt5 positions sync: %s", e)
+            return
+        out = []
+        for p in positions or []:
+            try:
+                out.append(_MT5Pos(ticket=int(getattr(p, "ticket", 0) or 0),
+                    symbol=str(getattr(p, "symbol", "") or ""),
+                    canonical_id=str(getattr(p, "canonical_id", "") or ""),
+                    side=str(getattr(p, "side", "") or ""),
+                    volume=float(getattr(p, "volume", 0) or 0),
+                    entry=float(getattr(p, "entry", 0) or 0),
+                    current=getattr(p, "current", None),
+                    sl=getattr(p, "sl", None), tp=getattr(p, "tp", None),
+                    profit=getattr(p, "profit", None), swap=getattr(p, "swap", None),
+                    comment=str(getattr(p, "comment", "") or ""),
+                    open_time=getattr(p, "open_time", None)))
+            except Exception:
+                continue
+        before = {p.ticket for p in self._mt5_positions} if self._mt5_positions else set()
+        after = {p.ticket for p in out}
+        if before and after != before:
+            closed = sorted(before - after)
+            if closed:
+                logger.info("MT5 positions closed externally: %s", closed)
+        self._mt5_positions = tuple(out)
+
+    async def _mt5_bootstrap(self):
+        if not self._mt5_enabled or self._mt5_provider is None:
+            return
+        try:
+            await self._mt5_provider.connect()
+        except Exception as exc:
+            logger.warning("mt5 provider connect failed: %s", exc)
+            try:
+                from falcon_terminal.models import MT5AccountSnapshot as _A
+                self._mt5_account = _A(state="ERROR", message=f"MT5: {exc}")
+            except Exception:
+                pass
+            return
+        self._register_mt5_catalog()
+        if self._mt5_conn is not None:
+            try:
+                self._mt5_conn.connect()
+            except Exception as exc:
+                logger.warning("mt5 terminal attach failed: %s", exc)
+        if self._mt5_exec is not None:
+            try:
+                mt5_mod = getattr(self._mt5_provider, "_mt5", None)
+                server = getattr(self._mt5_provider, "server_actual", "") or ""
+                self._mt5_exec._mt5 = mt5_mod
+                self._mt5_exec.server = server
+                self._mt5_exec.enable(mt5_mod)
+            except Exception as exc:
+                logger.info("mt5 demo execution not enabled: %s", exc)
+                try:
+                    self._mt5_exec.disable(str(exc))
+                except Exception:
+                    pass
+        self._mt5_last_sync = 0.0
+        await self._mt5_poll(force=True)
+
+    async def _mt5_poll(self, force=False):
+        if not self._mt5_enabled or self._mt5_provider is None:
+            return
+        try:
+            await self._mt5_provider.refresh_once()
+        except Exception as e:
+            logger.debug("mt5 refresh: %s", e)
+        self._sync_mt5_ticks()
+        import time as _t
+        now = _t.monotonic()
+        if force or (now - self._mt5_last_sync) >= self._mt5_sync_s:
+            self._mt5_last_sync = now
+            self._sync_mt5_account()
+
+    async def _mt5_shutdown(self):
+        prov = self._mt5_provider
+        if prov is not None:
+            try:
+                await prov.disconnect()
+            except Exception:
+                pass
+        conn = self._mt5_conn
+        if conn is not None:
+            try:
+                conn.disconnect()
+            except Exception:
+                pass
 
     def _track_mint_sync(self, mint: str) -> str:
         """Validate + construct a Solana provider. Returns "" or an error."""
@@ -705,8 +951,11 @@ class TerminalBridge:
         """Full history fetch + merge. Never raises into the loop."""
         try:
             asset = self._registry.get(cid)
-            if asset is None or asset.provider != "binance":
+            if asset is None or asset.provider not in ("binance", "mt5"):
                 raise IOError(f"history unsupported for {cid}")
+            if asset.provider == "mt5":
+                await self._fetch_mt5_history(cid, tf)
+                return
             ref = parse_canonical_id(cid)["ref"]
             candles, _rejected = await self._history_fetcher(ref, tf, 200)
             closed, forming = disc.mark_forming(candles)
@@ -734,6 +983,34 @@ class TerminalBridge:
         finally:
             self._chart_loading.discard((cid, tf))
 
+    async def _fetch_mt5_history(self, cid: str, tf: str) -> None:
+        from falcon_terminal.registry import parse_mt5_id
+        try:
+            sym = parse_mt5_id(cid)["symbol"]
+        except ValueError:
+            parsed = parse_canonical_id(cid)
+            sym = parsed.get("symbol") or parsed.get("ref", "")
+        prov = self._mt5_provider
+        if prov is None:
+            raise IOError(f"MT5 provider unavailable for {cid}")
+        candles, _rej = await prov.fetch_bars(sym, tf, 200)
+        closed = [c for c in candles if getattr(c, "is_closed", True)]
+        forming = next((c for c in candles if not getattr(c, "is_closed", True)), None)
+        fresh = ([{"open_ms": int(c.timestamp.timestamp() * 1000),
+                   "o": float(c.open), "h": float(c.high), "l": float(c.low),
+                   "c": float(c.close), "v": float(c.volume), "closed": True} for c in closed]
+                 + ([{"open_ms": int(forming.timestamp.timestamp() * 1000),
+                      "o": float(forming.open), "h": float(forming.high),
+                      "l": float(forming.low), "c": float(forming.close),
+                      "v": float(forming.volume), "closed": False}] if forming is not None else []))
+        old = _tuples_to_dicts(self._registry.history_get(cid, tf))
+        old_closed = [b for b in old if b.get("closed", True)]
+        merged, merged_forming = merge_candle_series(old_closed, fresh)
+        self._registry.history_put(cid, tf, _chart_tuples(merged, merged_forming))
+        self._registry.mark_changed(cid)
+        self._chart_notes.pop(cid, None)
+        self._last_tail[(cid, tf)] = time.monotonic()
+
     async def _aggregation_fallback(self, cid: str, tf: str) -> bool:
         """Aggregate from the finest cached timeframe. Returns success."""
         try:
@@ -759,7 +1036,10 @@ class TerminalBridge:
         """Light tail refresh: merge the last few bars into the cache."""
         try:
             asset = self._registry.get(cid)
-            if asset is None or asset.provider != "binance":
+            if asset is None or asset.provider not in ("binance", "mt5"):
+                return
+            if asset.provider == "mt5":
+                await self._tail_mt5(cid, tf)
                 return
             ref = parse_canonical_id(cid)["ref"]
             candles, _rejected = await self._history_fetcher(ref, tf, 5)
@@ -789,6 +1069,46 @@ class TerminalBridge:
         finally:
             self._chart_loading.discard((cid, tf))
 
+    async def _tail_mt5(self, cid: str, tf: str) -> None:
+        from falcon_terminal.registry import parse_mt5_id
+        try:
+            sym = parse_mt5_id(cid)["symbol"]
+        except ValueError:
+            parsed = parse_canonical_id(cid)
+            sym = parsed.get("symbol") or parsed.get("ref", "")
+        prov = self._mt5_provider
+        if prov is None:
+            self._chart_loading.discard((cid, tf))
+            return
+        try:
+            candles, _rej = await prov.fetch_bars(sym, tf, 5)
+        except Exception as e:
+            logger.debug("mt5 tail %s %s failed: %s", cid, tf, e)
+            self._chart_loading.discard((cid, tf))
+            return
+        try:
+            closed = [c for c in candles if getattr(c, "is_closed", True)]
+            forming = next((c for c in candles if not getattr(c, "is_closed", True)), None)
+            fresh = ([{"open_ms": int(c.timestamp.timestamp() * 1000),
+                       "o": float(c.open), "h": float(c.high), "l": float(c.low),
+                       "c": float(c.close), "v": float(c.volume), "closed": True} for c in closed]
+                     + ([{"open_ms": int(forming.timestamp.timestamp() * 1000),
+                          "o": float(forming.open), "h": float(forming.high),
+                          "l": float(forming.low), "c": float(forming.close),
+                          "v": float(forming.volume), "closed": False}] if forming is not None else []))
+            if fresh:
+                old = [b for b in _tuples_to_dicts(self._registry.history_get(cid, tf)) if b.get("closed", True)]
+                merged, merged_forming = merge_candle_series(old, fresh)
+                before = self._registry.history_get(cid, tf)
+                after = _chart_tuples(merged, merged_forming)
+                if after != before:
+                    self._registry.history_put(cid, tf, after)
+                    self._registry.mark_changed(cid)
+        except Exception as e:
+            logger.debug("mt5 tail merge %s %s failed: %s", cid, tf, e)
+        finally:
+            self._chart_loading.discard((cid, tf))
+
     async def _prefetch_neighbors(self) -> None:
         """Warm likely neighboring timeframes for the selected asset.
 
@@ -801,7 +1121,7 @@ class TerminalBridge:
         if not cid:
             return
         asset = self._registry.get(cid)
-        if asset is None or asset.provider != "binance":
+        if asset is None or asset.provider not in ("binance", "mt5"):
             return
         if not self._registry.history_fresh(cid, tf, TF_TTL.get(tf, 60.0)):
             return  # active view first; neighbors only after it loads
@@ -981,6 +1301,7 @@ class TerminalBridge:
         self._publish()
         for key, provider in self._prioritized_providers():
             self._spawn_connect(key, provider)
+        await self._mt5_bootstrap()
         uni_task: Optional[asyncio.Task] = None
         try:
             if self._universe and self._injected is None \
@@ -992,6 +1313,7 @@ class TerminalBridge:
                 await asyncio.gather(*(self._collect(key, provider)
                                        for key, provider in
                                        self._prioritized_providers()))
+                await self._mt5_poll()
                 await self._ensure_active_view()
                 await self._maybe_tail_refresh()
                 await self._prefetch_neighbors()
@@ -1017,6 +1339,7 @@ class TerminalBridge:
             await asyncio.gather(*list(self._hist_tasks.values()),
                                  return_exceptions=True)
             final_providers = self._snapshot_providers()
+            await self._mt5_shutdown()
             shutdown = await asyncio.gather(
                 *(provider.disconnect() for _, provider in final_providers),
                 return_exceptions=True)

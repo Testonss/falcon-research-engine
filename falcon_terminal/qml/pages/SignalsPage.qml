@@ -161,6 +161,40 @@ ColumnLayout {
                     wrapMode: Text.WordWrap
                     Layout.fillWidth: true
                 }
+                Rectangle { Layout.fillWidth: true; height: 1; color: FalconTheme.borderSubtle }
+                Text {
+                    text: selected.provider === "mt5" ? ("MT5 DEMO eligible · " + mt5account.bannerText) : "MT5 DEMO: select an MT5 instrument to enable demo orders."
+                    color: selected.provider === "mt5" ? FalconTheme.positive : FalconTheme.textMuted
+                    font.family: FalconTheme.fontFamily
+                    font.pixelSize: FalconTheme.small
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 34
+                    radius: FalconTheme.r6
+                    color: (selected.provider === "mt5" && mt5account.executionEnabled) ? "#12382a" : "transparent"
+                    border.color: (selected.provider === "mt5" && mt5account.executionEnabled) ? FalconTheme.positive : FalconTheme.borderDefault
+                    opacity: (selected.provider === "mt5" && mt5account.executionEnabled) ? 1.0 : 0.5
+                    Text { anchors.centerIn: parent; text: "OPEN MT5 DEMO POSITION"; color: FalconTheme.textPrimary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small; font.bold: true }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        enabled: selected.provider === "mt5" && mt5account.executionEnabled
+                        onClicked: nav.go("mt5")
+                    }
+                }
+                Text {
+                    visible: mt5account.state === "CONNECTED_REAL_BLOCKED"
+                    text: "MT5 REAL ACCOUNT DETECTED — EXECUTION DISABLED"
+                    color: FalconTheme.negative
+                    font.family: FalconTheme.fontFamily
+                    font.pixelSize: FalconTheme.small
+                    font.bold: true
+                    wrapMode: Text.WordWrap
+                    Layout.fillWidth: true
+                }
             }
         }
     }

@@ -488,8 +488,40 @@ def cmd_terminal(args):
         argv += ["--page", args.page]
     if args.poll_interval != 15.0:
         argv += ["--poll-interval", str(args.poll_interval)]
+    if getattr(args, "mt5", False) or getattr(args, "provider", "") == "mt5":
+        argv += ["--mt5"]
+    if getattr(args, "mt5_path", None):
+        argv += ["--mt5-path", args.mt5_path]
     argv += ["--ui", args.ui]
     return terminal_main(argv)
+
+
+def cmd_mt5_status(args):
+    """Read-only MT5 diagnostic: terminal/account state. Never sends orders."""
+    try:
+        from falcon_terminal.mt5_connection import MT5ConnectionManager
+    except ImportError as e:
+        die(f"MT5 support unavailable: {e}")
+    mgr = MT5ConnectionManager(terminal_path=getattr(args, "terminal_path", None) or "")
+    snap = mgr.connect()
+    print(f"state={snap.state}")
+    print(f"message={snap.message}")
+    if snap.server:
+        print(f"server={snap.server}")
+    if snap.login:
+        print(f"login={snap.login}")
+    if snap.mode_name:
+        print(f"mode={snap.mode_name} demo={snap.demo} execution_enabled={snap.execution_enabled}")
+    for key in ("balance", "equity", "margin", "margin_free", "profit"):
+        val = getattr(snap, key, None)
+        if val is not None:
+            print(f"{key}={val}")
+    health = mgr.terminal_health()
+    if health.get("last_error") not in (None, (0, "")):
+        print(f"last_error={health.get('last_error')}")
+    mgr.disconnect()
+    # REAL accounts are not an error here (diagnostic only): execution stays disabled.
+    return 0 if snap.state in ("CONNECTED_DEMO", "CONNECTED_REAL_BLOCKED", "STALE") else 1
 
 
 def add_data_args(ap):
@@ -587,7 +619,7 @@ def main(argv=None):
     lv.set_defaults(fn=cmd_live)
 
     t = sub.add_parser("terminal", help="open the native read-only market terminal")
-    t.add_argument('--provider', default="both", choices=["both", "binance", "solana"],
+    t.add_argument('--provider', default="both", choices=["both", "binance", "solana", "mt5"],
                    help="initial watchlist scope (default: both)")
     t.add_argument('--symbol', default="BTCUSDT",
                    help="Binance spot symbol (default: BTCUSDT)")
@@ -599,6 +631,10 @@ def main(argv=None):
                    help="presentation layer (default: qml; tk is the fallback)")
     t.add_argument('--poll-interval', type=float, default=15.0,
                    help="Solana poll seconds (default: 15)")
+    t.add_argument('--mt5', action='store_true',
+                   help="enable MT5 DEMO integration (demo accounts only; real blocked)")
+    t.add_argument('--mt5-path', default=None,
+                   help="optional MT5 terminal path (default: attach to running terminal)")
     t.set_defaults(fn=cmd_terminal)
 
     d = sub.add_parser("dataset", help="inspect dataset files and manifests")
@@ -606,6 +642,13 @@ def main(argv=None):
     di = dsub.add_parser("inspect", help="validate + summarize a manifest/CSV pair")
     di.add_argument('manifest', help="path to .manifest.json (CSV resolved alongside)")
     di.set_defaults(fn=cmd_dataset_inspect)
+
+    m = sub.add_parser("mt5", help="MetaTrader 5 DEMO diagnostics (no orders)")
+    msub = m.add_subparsers(dest="mt5_cmd", required=True)
+    ms = msub.add_parser("status", help="show MT5 terminal/account state (read-only)")
+    ms.add_argument('--terminal-path', default=None,
+                    help="optional MT5 terminal path (default: attach to running terminal)")
+    ms.set_defaults(fn=cmd_mt5_status)
 
     args = ap.parse_args(argv)
     configure_logging(args)

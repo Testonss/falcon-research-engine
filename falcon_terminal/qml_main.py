@@ -77,10 +77,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Falcon Terminal (QML): read-only native live market terminal")
     parser.add_argument("--provider", default="both",
-                        choices=("both", "binance", "solana"))
+                        choices=("both", "binance", "solana", "mt5"))
     parser.add_argument("--symbol", default="BTCUSDT")
     parser.add_argument("--mint", default=None)
     parser.add_argument("--solana-mint", default=None)
+    parser.add_argument("--mt5", action="store_true",
+                        help="enable MT5 DEMO integration (demo only; real blocked)")
+    parser.add_argument("--mt5-path", default=None,
+                        help="optional MT5 terminal path")
     parser.add_argument("--page", default="radar",
                         choices=("radar", "signals", "meme", "assets"))
     parser.add_argument("--poll-interval", type=float, default=15.0)
@@ -133,7 +137,8 @@ def main(argv=None) -> int:
     controller = TerminalController(symbol=args.symbol, solana_mint=mint,
                                     poll_interval=args.poll_interval,
                                     universe=True, track_mints=(mint,),
-                                    store_path=state_path())
+                                    store_path=state_path(),
+                                    mt5_enabled=bool(args.mt5 or args.provider == "mt5"))
     controller.nav.go(args.page)
     engine.rootContext().setContextProperty("FalconTheme", Theme(engine))
     engine.rootContext().setContextProperty("assets", controller.assets)
@@ -141,6 +146,8 @@ def main(argv=None) -> int:
     engine.rootContext().setContextProperty("health", controller.health)
     engine.rootContext().setContextProperty("nav", controller.nav)
     engine.rootContext().setContextProperty("ctrl", controller)
+    engine.rootContext().setContextProperty("mt5account", controller.mt5account)
+    engine.rootContext().setContextProperty("mt5positions", controller.mt5positions)
 
     errors = []
 

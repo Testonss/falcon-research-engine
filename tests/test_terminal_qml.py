@@ -250,7 +250,7 @@ class ViewModelTests(unittest.TestCase):
         self.assertEqual(nav.page, "meme")
         nav.go("nope")
         self.assertEqual(nav.page, "meme")
-        for page in ("assets", "paper", "reports", "settings"):
+        for page in ("assets", "mt5", "paper", "reports", "settings"):
             nav.go(page)
             self.assertEqual(nav.page, page)
 
@@ -260,17 +260,38 @@ class BoundaryTests(unittest.TestCase):
         return list((ROOT / "falcon_terminal" / "qml").rglob("*.qml"))
 
     def test_no_trading_controls_or_actions(self):
-        word = re.compile(r"\b(buy|sell|swap|wallet|seed|private_key|apikey|"
+        # Live-trading vocabulary stays banned everywhere. BUY/SELL side
+        # strings are allowed ONLY inside MT5 DEMO-gated surfaces
+        # (MT5DemoPage.qml, and the demo block of SignalsPage.qml), where
+        # every order path requires a verified DEMO account and the word
+        # DEMO on the confirmation. No bypass affordances may exist.
+        word = re.compile(r"\b(swap|wallet|seed|private_key|apikey|"
                           r"api_key|place_order|market_order|limit_order|"
                           r"connect_wallet)\b", re.IGNORECASE)
         for path in self.qml_sources():
             text = path.read_text(encoding="utf-8")
             self.assertIsNone(word.search(text), f"{path.name} trading word")
+        side_word = re.compile(r"\b(buy|sell)\b", re.IGNORECASE)
+        for path in self.qml_sources():
+            text = path.read_text(encoding="utf-8")
+            for match in side_word.finditer(text):
+                self.assertIn(path.name, ("MT5DemoPage.qml", "SignalsPage.qml"),
+                              f"{path.name} buy/sell outside MT5 DEMO surface")
+                window = text[max(0, match.start() - 1500):match.end() + 1500]
+                self.assertIn("demo", window.lower(),
+                              f"{path.name} buy/sell without DEMO gating nearby")
         for path in self.qml_sources():
             for match in re.finditer(r"text:\s*\"([^\"]+)\"", path.read_text(encoding="utf-8")):
                 label = match.group(1).strip().upper()
                 self.assertNotIn(label, {"BUY", "SELL", "SWAP", "ORDER", "TRADE",
                                          "CONNECT WALLET"}, path.name)
+        # Confirmation + safety copy requirements for the demo milestone.
+        lowered = " ".join(p.read_text(encoding="utf-8").lower()
+                           for p in self.qml_sources())
+        self.assertNotIn("proceed anyway", lowered)
+        self.assertNotIn("disable safety", lowered)
+        self.assertIn("open demo position", lowered)
+        self.assertIn("mt5 demo", lowered)
 
     def test_no_wallet_or_key_inputs(self):
         lowered = " ".join(p.read_text(encoding="utf-8").lower()
@@ -286,6 +307,11 @@ class BoundaryTests(unittest.TestCase):
                 imported.update(a.name for a in node.names)
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imported.add(node.module)
+        # The DEMO-only execution adapter is an explicit allowlist entry:
+        # it cannot trade without a verified MT5 DEMO account (double guard)
+        # and holds no live-trading capability. All other trading-adjacent
+        # modules stay banned from the QML view layer.
+        imported.discard("execution.mt5_demo")
         roots = {n.split(".")[0] for n in imported}
         self.assertFalse(roots & {"market_data", "execution", "exchange",
                                   "research", "strategy", "risk", "portfolio",
@@ -347,6 +373,8 @@ class EngineLoadTests(unittest.TestCase):
         engine.rootContext().setContextProperty("health", ctrl.health)
         engine.rootContext().setContextProperty("nav", ctrl.nav)
         engine.rootContext().setContextProperty("ctrl", ctrl)
+        engine.rootContext().setContextProperty("mt5account", ctrl.mt5account)
+        engine.rootContext().setContextProperty("mt5positions", ctrl.mt5positions)
         engine.load(QUrl.fromLocalFile(str(qml_dir() / "main.qml")))
         root = engine.rootObjects()[0] if engine.rootObjects() else None
         if root is not None:
@@ -393,6 +421,8 @@ class EngineLoadTests(unittest.TestCase):
             "meme": ("MemeRadarPage", ("tokenTablePanel", "tokenPanel",
                                        "whyPanel", "insightPanel")),
             "assets": ("AssetsPage", ("assetsTablePanel",)),
+            "mt5": ("MT5DemoPage", ("mt5AccountPanel", "mt5PositionsPanel",
+                                    "mt5ManualPanel", "mt5SettingsPanel")),
         }
         for width, height in ((1920, 1080), (1600, 900), (1440, 900), (1366, 768)):
             engine, root, errors = self._load(width, height)

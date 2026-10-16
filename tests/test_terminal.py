@@ -553,8 +553,8 @@ class TerminalImportBoundaryTests(unittest.TestCase):
 
     def test_no_trading_ui_actions_exist(self):
         import re
-        for rel in ("falcon_terminal/app.py", "falcon_terminal/__main__.py",
-                    "falcon_terminal/bridge.py"):
+        # Read-only shells stay free of any trading vocabulary.
+        for rel in ("falcon_terminal/app.py", "falcon_terminal/__main__.py"):
             source = Path(__file__).resolve().parents[1] / rel
             text = source.read_text(encoding="utf-8")
             for word in ("buy", "sell", "swap", "wallet", "seed",
@@ -563,6 +563,32 @@ class TerminalImportBoundaryTests(unittest.TestCase):
                 self.assertIsNone(
                     re.search(r"\b%s\b" % word, text, re.IGNORECASE),
                     f"{rel} contains trading word {word!r}")
+        # The bridge carries MT5 DEMO position snapshots (terminal is
+        # authoritative): the MT5 `swap` field and BUY/SELL side strings may
+        # appear ONLY inside MT5 demo-sync code. Order submission itself is
+        # banned here — it lives in execution/mt5_demo with a double guard.
+        bridge = (Path(__file__).resolve().parents[1]
+                  / "falcon_terminal" / "bridge.py").read_text(encoding="utf-8")
+        self.assertIsNone(
+            re.search(r"\border_send\b", bridge, re.IGNORECASE),
+            "bridge.py must never submit orders (demo execution lives in execution/mt5_demo)")
+        for word in ("wallet", "seed", "private_key", "apikey", "api_key",
+                     "place_order", "market_order", "limit_order",
+                     "connect_wallet"):
+            self.assertIsNone(
+                re.search(r"\b%s\b" % word, bridge, re.IGNORECASE),
+                f"bridge.py contains trading word {word!r}")
+        for match in re.finditer(r"\b(buy|sell|swap)\b", bridge, re.IGNORECASE):
+            window = bridge[max(0, match.start() - 600):match.end() + 600]
+            low = window.lower()
+            if match.group(1).lower() == "swap":
+                # MT5 position field (overnight charges), not a trade verb.
+                self.assertTrue("mt5" in low,
+                    "bridge.py swap outside MT5 position-sync context")
+            else:
+                self.assertTrue(
+                    "mt5" in low and "demo" in low,
+                    "bridge.py buy/sell outside MT5 DEMO sync context")
         app_text = (Path(__file__).resolve().parents[1]
                     / "falcon_terminal" / "app.py").read_text(encoding="utf-8")
         buttons = re.findall(r"tk\.Button\(.*?text=\"([^\"]+)\"", app_text)

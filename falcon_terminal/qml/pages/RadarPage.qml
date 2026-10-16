@@ -66,7 +66,7 @@ ColumnLayout {
         ComboBox {
             id: providerBox
             Layout.preferredWidth: 150
-            model: ["All", "Binance", "Solana"]
+            model: ["All", "Binance", "Solana", "MT5"]
             font.family: FalconTheme.fontFamily
             font.pixelSize: FalconTheme.body
             background: Rectangle {

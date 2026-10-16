@@ -20,6 +20,7 @@ ApplicationWindow {
         { id: "radar", label: "Radar" },
         { id: "assets", label: "Assets" },
         { id: "signals", label: "Signals" },
+        { id: "mt5", label: "MT5 Demo" },
         { id: "paper", label: "Paper" },
         { id: "reports", label: "Reports" },
         { id: "settings", label: "Settings" }
@@ -29,7 +30,7 @@ ApplicationWindow {
         "reports": "Campaign reports stay in the Falcon CLI for now.",
         "settings": "Settings arrive with the next terminal milestone."
     }
-    property string pageTitle: nav.page === "radar" ? "Live Market" : (nav.page === "signals" ? "Signal Workstation" : (nav.page === "meme" ? "Meme Coin Radar" : nav.page))
+    property string pageTitle: nav.page === "radar" ? "Live Market" : (nav.page === "signals" ? "Signal Workstation" : (nav.page === "meme" ? "Meme Coin Radar" : (nav.page === "mt5" ? "MT5 Demo" : nav.page)))
     // Responsive breakpoints: compact gutters/sidebar/panels under 1400px.
     property bool narrowMode: width < 1400
     property int navItemWidth: (narrowMode ? 120 : 150) - 24
@@ -82,7 +83,7 @@ ApplicationWindow {
                         color: active ? "#2a2118" : (pressed ? FalconTheme.bgSelected : (hovered ? FalconTheme.bgHover : "transparent"))
                         border.color: active ? FalconTheme.accentGold : (hovered ? FalconTheme.borderActive : "transparent")
                         border.width: 1
-                        opacity: (modelData.id === "radar" || modelData.id === "signals" || modelData.id === "meme" || modelData.id === "assets") ? 1.0 : 0.55
+                        opacity: (modelData.id === "radar" || modelData.id === "signals" || modelData.id === "meme" || modelData.id === "assets" || modelData.id === "mt5") ? 1.0 : 0.55
                         Text {
                             anchors.verticalCenter: parent.verticalCenter
                             anchors.left: parent.left
@@ -147,16 +148,37 @@ ApplicationWindow {
                 }
             }
 
+            // MT5 DEMO banner (persistent; credentials never displayed)
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: mt5account.state === "DISCONNECTED" ? 0 : 30
+                visible: mt5account.state !== "DISCONNECTED"
+                color: mt5account.state === "CONNECTED_DEMO" ? "#12382a" : (mt5account.state === "CONNECTED_REAL_BLOCKED" ? "#4a1620" : (mt5account.state === "STALE" ? "#3a2f14" : "#2a1a10"))
+                border.color: mt5account.state === "CONNECTED_DEMO" ? FalconTheme.positive : (mt5account.state === "CONNECTED_REAL_BLOCKED" ? FalconTheme.negative : FalconTheme.warning)
+                border.width: 1
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: FalconTheme.s20
+                    anchors.rightMargin: FalconTheme.s20
+                    spacing: FalconTheme.s12
+                    Text { text: mt5account.bannerText; color: mt5account.state === "CONNECTED_REAL_BLOCKED" ? FalconTheme.negative : (mt5account.state === "CONNECTED_DEMO" ? FalconTheme.positive : FalconTheme.warning); font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small; font.bold: true }
+                    Text { text: mt5account.server !== "" ? ("account " + mt5account.login + " @ " + mt5account.server + " · mode " + mt5account.modeName) : mt5account.message; color: FalconTheme.textSecondary; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small }
+                    Item { Layout.fillWidth: true }
+                    Text { text: mt5account.executionEnabled ? "demo execution gated ON (DEMO verified)" : "execution disabled"; color: FalconTheme.textMuted; font.family: FalconTheme.fontFamily; font.pixelSize: FalconTheme.small }
+                }
+            }
+
             // Pages
             StackLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.margins: root.pageMargins
-                currentIndex: nav.page === "radar" ? 0 : (nav.page === "signals" ? 1 : (nav.page === "meme" ? 2 : (nav.page === "assets" ? 3 : 4)))
+                currentIndex: nav.page === "radar" ? 0 : (nav.page === "signals" ? 1 : (nav.page === "meme" ? 2 : (nav.page === "assets" ? 3 : (nav.page === "mt5" ? 4 : 5))))
                 RadarPage {}
                 SignalsPage {}
                 MemeRadarPage {}
                 AssetsPage {}
+                MT5DemoPage {}
                 Panel {
                     objectName: "placeholderPanel"
                     title: "Coming with a later milestone"

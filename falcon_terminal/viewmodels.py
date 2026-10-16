@@ -550,7 +550,7 @@ class HealthVM(QObject):
 
 class NavVM(QObject):
     changed = Signal()
-    PAGES = ("radar", "signals", "meme", "assets", "paper", "reports", "settings")
+    PAGES = ("radar", "signals", "meme", "assets", "mt5", "paper", "reports", "settings")
 
     def __init__(self, parent: Optional[QObject] = None):
         super().__init__(parent)
@@ -576,7 +576,8 @@ class TerminalController(QObject):
     def __init__(self, symbol: str = "BTCUSDT", solana_mint: str = "",
                  poll_interval: float = 15.0, parent: Optional[QObject] = None,
                  bridge_factory=None, universe: bool = False,
-                 track_mints: tuple = (), store_path=None):
+                 track_mints: tuple = (), store_path=None,
+                 mt5_enabled: bool = False, mt5_sync_s: float = 5.0):
         super().__init__(parent)
         from falcon_terminal.store import LocalStore
         from falcon_terminal.timeframes import TIMEFRAMES
@@ -590,6 +591,8 @@ class TerminalController(QObject):
         self._universe = bool(universe)
         self._track_mints = tuple(track_mints)
         self._store = LocalStore(store_path)
+        self._mt5_enabled = bool(mt5_enabled or self._store.mt5_enabled)
+        self._mt5_sync_s = max(2.0, float(mt5_sync_s))
         self._watched: Set[str] = set()
         self._tf_by_key: Dict[str, str] = {}
         self._last_view: tuple = (None, None)
@@ -605,6 +608,12 @@ class TerminalController(QObject):
         self.selected = SelectedAssetVM(self)
         self.health = HealthVM(self)
         self.nav = NavVM(self)
+        from falcon_terminal.mt5_viewmodels import MT5AccountVM as _AccVM
+        from falcon_terminal.mt5_viewmodels import MT5PositionsModel as _PosModel
+        self.mt5account = _AccVM(self)
+        self.mt5positions = _PosModel(self)
+        self._mt5_last_error: str = ""
+        self._mt5_busy: bool = False
 
     # -- discoverable metadata (drives filter combos; grows with providers) ----
     @Property('QVariantList', notify=listsChanged)
@@ -629,6 +638,17 @@ class TerminalController(QObject):
 
     @Property('QVariantList', notify=watchedChanged)
     def watchedKeys(self): return sorted(self._watched)
+
+    mt5Changed = Signal()
+
+    @Property(bool, notify=mt5Changed)
+    def mt5Enabled(self): return self._mt5_enabled
+
+    @Property(bool, notify=mt5Changed)
+    def mt5Busy(self): return self._mt5_busy
+
+    @Property(str, notify=mt5Changed)
+    def mt5Error(self): return self._mt5_last_error
 
     def _refresh_lists(self, snapshot) -> None:
         providers, chains, quotes, dexes = [], [], [], []
@@ -664,6 +684,8 @@ class TerminalController(QObject):
                       poll_interval=self._poll_interval)
         if self._universe:
             kwargs.update(universe=True, track_mints=self._track_mints)
+        if self._mt5_enabled:
+            kwargs.update(mt5_enabled=True, mt5_sync_s=self._mt5_sync_s)
         try:
             self._bridge = self._bridge_factory(**kwargs)
         except TypeError:
@@ -838,3 +860,215 @@ class TerminalController(QObject):
             self._sync_bridge_view()
         self._refresh_lists(snapshot)
         self.health.sync(snapshot)
+        try:
+            self.mt5account.sync(getattr(snapshot, "mt5_account", None))
+        except Exception:
+            pass
+        try:
+            self.mt5positions.sync(getattr(snapshot, "mt5_positions", ()))
+        except Exception:
+            pass
+
+    # -- MT5 DEMO execution (human-gated; worker thread; double-guarded) ----
+    def _mt5_exec_adapter(self):
+        bridge = self._bridge
+        if bridge is None:
+            return None
+        return getattr(bridge, "_mt5_exec", None)
+
+    def _set_mt5_busy(self, busy: bool, error: str = ""):
+        self._mt5_busy = busy
+        if error:
+            self._mt5_last_error = error
+        elif not busy:
+            pass
+        try:
+            self.mt5Changed.emit()
+        except Exception:
+            pass
+
+    @Slot(str, str, float, float, float, result=str)
+    def openDemoPosition(self, canonical_id, side, volume, sl, tp):
+        """Open an MT5 DEMO position. Returns '' on submit, else error text.
+
+        Runs order_send off the GUI thread (one-shot worker, bounded).
+        Requires a DEMO account at submit time AND immediately before send
+        (double guard inside the adapter). No automatic execution: QML calls
+        this only from the explicit OPEN DEMO POSITION confirmation.
+        """
+        from execution.mt5_demo import DemoSafetyError, OrderRequest
+        adapter = self._mt5_exec_adapter()
+        if adapter is None:
+            err = "MT5 demo execution unavailable (integration disabled)"
+            self._set_mt5_busy(False, err)
+            return err
+        if not self.mt5account.executionEnabled:
+            # Fail closed on the UI state too; the adapter re-checks anyway.
+            state = self.mt5account.state
+            err = ("MT5 REAL ACCOUNT DETECTED — EXECUTION DISABLED"
+                   if state == "CONNECTED_REAL_BLOCKED"
+                   else f"MT5 demo execution not enabled ({state})")
+            self._set_mt5_busy(False, err)
+            return err
+        try:
+            from falcon_terminal.registry import parse_canonical_id
+            parsed = parse_canonical_id(canonical_id)
+            if parsed.get("provider") != "mt5":
+                raise DemoSafetyError("not an MT5 instrument")
+            symbol = parsed.get("symbol") or parsed.get("ref", "")
+        except Exception as exc:
+            err = f"invalid MT5 instrument: {exc}"
+            self._set_mt5_busy(False, err)
+            return err
+        if side not in ("BUY", "SELL"):
+            return "order rejected: side must be BUY or SELL"
+        try:
+            vol = float(volume)
+        except (TypeError, ValueError):
+            return "order rejected: invalid volume"
+        req = OrderRequest(canonical_id=canonical_id, symbol=symbol, side=side,
+                           volume=vol,
+                           sl=float(sl) if sl else None,
+                           tp=float(tp) if tp else None)
+        # Reference price + age from the selected snapshot (stale rejected).
+        ref_price, age = None, None
+        try:
+            bridge = self._bridge
+            st = bridge.registry.state(canonical_id) if bridge is not None else None
+            ref_price = st.price if st else None
+            age = st.age_s if st else None
+        except Exception:
+            pass
+        self._set_mt5_busy(True)
+        import threading as _th
+
+        def _run():
+            try:
+                adapter.open_position(req, ref_price, age)
+                self._mt5_last_error = ""
+            except Exception as exc:
+                self._mt5_last_error = str(exc)
+            finally:
+                self._mt5_busy = False
+                try:
+                    self.mt5Changed.emit()
+                except Exception:
+                    pass
+
+        _th.Thread(target=_run, name="FalconMT5Order", daemon=True).start()
+        return ""
+
+    @Slot(int, result=str)
+    def closeDemoPosition(self, ticket):
+        adapter = self._mt5_exec_adapter()
+        if adapter is None:
+            return "MT5 demo execution unavailable"
+        if not self.mt5account.executionEnabled:
+            return "MT5 REAL ACCOUNT DETECTED — EXECUTION DISABLED"
+        self._set_mt5_busy(True)
+        import threading as _th
+
+        def _run():
+            try:
+                adapter.close_position(int(ticket))
+                self._mt5_last_error = ""
+            except Exception as exc:
+                self._mt5_last_error = str(exc)
+            finally:
+                self._mt5_busy = False
+                try:
+                    self.mt5Changed.emit()
+                except Exception:
+                    pass
+
+        _th.Thread(target=_run, name="FalconMT5Close", daemon=True).start()
+        return ""
+
+    @Slot(int, float, float, result=str)
+    def modifyDemoSltp(self, ticket, sl, tp):
+        adapter = self._mt5_exec_adapter()
+        if adapter is None:
+            return "MT5 demo execution unavailable"
+        if not self.mt5account.executionEnabled:
+            return "MT5 REAL ACCOUNT DETECTED — EXECUTION DISABLED"
+        self._set_mt5_busy(True)
+        import threading as _th
+
+        def _run():
+            try:
+                adapter.modify_sltp(int(ticket),
+                                    float(sl) if sl else None,
+                                    float(tp) if tp else None)
+                self._mt5_last_error = ""
+            except Exception as exc:
+                self._mt5_last_error = str(exc)
+            finally:
+                self._mt5_busy = False
+                try:
+                    self.mt5Changed.emit()
+                except Exception:
+                    pass
+
+        _th.Thread(target=_run, name="FalconMT5Modify", daemon=True).start()
+        return ""
+
+    @Slot(str, result=str)
+    def demoOrderPreview(self, canonical_id):
+        """Human-readable confirmation text (symbol/side/price/server/DEMO)."""
+        try:
+            from falcon_terminal.registry import parse_canonical_id
+            parsed = parse_canonical_id(canonical_id)
+            symbol = parsed.get("symbol") or parsed.get("ref", "")
+            server = parsed.get("server") or self.mt5account.server
+        except Exception:
+            symbol, server = canonical_id, self.mt5account.server
+        price = self.selected.price if self.selected.key == canonical_id else "—"
+        return (f"MT5 DEMO · {symbol} · {price} · server {server or '—'} · "
+                f"mode {self.mt5account.modeName or '—'}")
+
+    # -- MT5 settings (functional; passwords never accepted/stored) ---------
+    @Slot(bool)
+    def setMt5Enabled(self, enabled: bool):
+        self._mt5_enabled = bool(enabled)
+        self._store.mt5_enabled = bool(enabled)
+        self._store.save()
+        try:
+            self.mt5Changed.emit()
+        except Exception:
+            pass
+
+    @Slot(float)
+    def setMt5SyncInterval(self, seconds: float):
+        try:
+            v = float(seconds)
+            if 2.0 <= v <= 60.0:
+                self._mt5_sync_s = v
+                self._store.mt5_sync_interval = v
+                self._store.save()
+        except (TypeError, ValueError):
+            pass
+
+    @Slot(float)
+    def setMt5DefaultVolume(self, volume: float):
+        try:
+            v = float(volume)
+            if 0.01 <= v <= 100.0:
+                self._store.mt5_default_volume = v
+                self._store.save()
+        except (TypeError, ValueError):
+            pass
+
+    @Slot(float)
+    def setMt5MaxRisk(self, risk: float):
+        try:
+            v = float(risk)
+            if 1.0 <= v <= 100000.0:
+                self._store.mt5_max_risk = v
+                self._store.save()
+        except (TypeError, ValueError):
+            pass
+
+    @Slot(str)
+    def setMt5TerminalPath(self, path: str):
+        self._store.mt5_terminal_path = path if isinstance(path, str) else ""
+        self._store.save()

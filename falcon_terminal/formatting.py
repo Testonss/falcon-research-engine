@@ -106,6 +106,10 @@ def feed_semantics(provider: str, source: str = "") -> str:
         if "polling" in s.lower():
             return s
         return "Polling"
+    if p == "mt5":
+        if s:
+            return s
+        return "MT5 polling"
     return s or "—"
 
 
