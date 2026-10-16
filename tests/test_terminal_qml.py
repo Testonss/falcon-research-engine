@@ -182,7 +182,7 @@ class ViewModelTests(unittest.TestCase):
         self.assertEqual(model.rowCount(), 1)
         self.assertEqual(model.count, 1)
         self.assertIn(0, changed)
-        self.assertEqual(model.row("binance:BTCUSDT")["priceText"], "2.00")
+        self.assertEqual(model.row("binance:BTCUSDT")["priceText"], "2.0000")
         model.clear()
         self.assertEqual(model.count, 0)
 

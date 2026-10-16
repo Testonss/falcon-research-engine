@@ -865,7 +865,7 @@ class ControllerMarketTests(unittest.TestCase):
         made[0].queue(_snap(_row(price=1.0), _row("binance:spot:ETHUSDT",
                                                  "ETH/USDT", price=2.0)))
         ctrl._poll()
-        self.assertEqual(ctrl.selected.price, "2.00")
+        self.assertEqual(ctrl.selected.price, "2.0000")
         self.assertIn("binance:spot:ETHUSDT", made[0].selections)
         # persisted + recent
         from falcon_terminal.store import LocalStore

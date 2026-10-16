@@ -128,6 +128,15 @@ class CanonicalAsset:
     kind: str = "asset"      # "asset" | "pool"
     parent_id: Optional[str] = None  # pool -> asset id
     supported: Tuple[str, ...] = ()  # chart timeframes honestly servable
+    # MT5 symbol metadata (None/0 = unknown; provider owns, UI only consumes).
+    digits: Optional[int] = None
+    point: Optional[float] = None
+    contract_size: Optional[float] = None
+    volume_min: Optional[float] = None
+    volume_max: Optional[float] = None
+    volume_step: Optional[float] = None
+    currency_base: str = ""
+    currency_profit: str = ""
 
 
 @dataclass
@@ -230,6 +239,8 @@ class AssetRegistry:
         Never overwrites populated fields; values currently holding a
         placeholder (e.g. the raw registry key used before first data)
         count as blank. The canonical id itself is immutable.
+        MT5 metadata fields (digits/point/contract_size/volume_*/currency_*)
+        are set when supplied and valid (digits 0..10, positive numerics).
         Returns True when anything changed.
         """
         asset = self._assets.get(cid)
@@ -247,6 +258,43 @@ class AssetRegistry:
                 patch["supported"] = tuple(supported)
             except TypeError:
                 pass
+        # MT5 symbol metadata: set when supplied and valid; may overwrite
+        # unknown (None) but never clobbers known values with unknown.
+        if "digits" in fields:
+            try:
+                d = fields.get("digits")
+                if d is not None:
+                    di = int(d)
+                    if 0 <= di <= 10 and asset.digits in (None, 0):
+                        patch["digits"] = di
+                    elif 0 <= di <= 10 and asset.digits != di:
+                        # Broker metadata is authoritative: accept updates.
+                        patch["digits"] = di
+            except (TypeError, ValueError):
+                pass
+        for num_field in ("point", "contract_size", "volume_min",
+                          "volume_max", "volume_step"):
+            if num_field in fields:
+                try:
+                    v = fields.get(num_field)
+                    if v is None:
+                        continue
+                    f = float(v)
+                    import math as _m
+                    if not _m.isfinite(f) or f < 0:
+                        continue
+                    cur = getattr(asset, num_field)
+                    if cur in (None, 0) or cur != f:
+                        patch[num_field] = f
+                except (TypeError, ValueError):
+                    pass
+        for s_field in ("currency_base", "currency_profit"):
+            if s_field in fields:
+                v = fields.get(s_field)
+                if isinstance(v, str) and v and not getattr(asset, s_field):
+                    patch[s_field] = v
+                elif isinstance(v, str) and v and getattr(asset, s_field) != v:
+                    patch[s_field] = v
         if not patch:
             return False
         self._assets[cid] = dataclasses.replace(asset, **patch)

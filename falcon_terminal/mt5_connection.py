@@ -51,6 +51,8 @@ class MT5ConnectionSnapshot:
     margin: Optional[float] = None
     margin_free: Optional[float] = None
     profit: Optional[float] = None
+    margin_level: Optional[float] = None
+    currency: str = ""
 
 
 class MT5ConnectionManager:
@@ -210,7 +212,9 @@ class MT5ConnectionManager:
             message=(f"{msg} · {err}" if st == "ERROR" and err else msg),
             balance=acc.get("balance"), equity=acc.get("equity"),
             margin=acc.get("margin"), margin_free=acc.get("margin_free"),
-            profit=acc.get("profit"))
+            profit=acc.get("profit"),
+            margin_level=acc.get("margin_level"),
+            currency=str(acc.get("currency", "") or ""))
 
     def terminal_health(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {"state": self.state, "error": self.last_error}

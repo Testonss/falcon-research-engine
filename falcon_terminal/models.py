@@ -18,6 +18,8 @@ class MT5AccountSnapshot:
     margin: Optional[float] = None
     margin_free: Optional[float] = None
     profit: Optional[float] = None
+    margin_level: Optional[float] = None
+    currency: str = ""
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,10 @@ class MT5PositionSnapshot:
     swap: Optional[float] = None
     comment: str = ""
     open_time: Optional[str] = None
+    # Instrument metadata for precise display (digits authoritative when known).
+    digits: Optional[int] = None
+    point: Optional[float] = None
+    contract_size: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -65,6 +71,18 @@ class AssetSnapshot:
     messages: int = 0
     error: Optional[str] = None
     source: str = ""
+    # Instrument-aware precision + MT5 symbol metadata (None = unknown).
+    # Provider/bridge/model owns metadata; QML never calls symbol_info().
+    price_digits: Optional[int] = None
+    digits: Optional[int] = None
+    point: Optional[float] = None
+    contract_size: Optional[float] = None
+    volume_min: Optional[float] = None
+    volume_max: Optional[float] = None
+    volume_step: Optional[float] = None
+    currency_base: str = ""
+    currency_profit: str = ""
+    volume_24h: Optional[float] = None
     # Live candle (Binance only): forming preferred, else last closed.
     # is_closed=False means provisional — never finalized history.
     candle_open: Optional[float] = None

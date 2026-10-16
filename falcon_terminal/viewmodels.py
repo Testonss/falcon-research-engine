@@ -34,6 +34,24 @@ def _feed_text(asset: AssetSnapshot) -> str:
     return asset.state
 
 
+def _digits_of(asset) -> Optional[int]:
+    for attr in ("price_digits", "digits"):
+        try:
+            v = getattr(asset, attr, None)
+            if v is None:
+                continue
+            d = int(v)
+            if 0 <= d <= 10:
+                # 0 digits means unknown in legacy metas; treat as unknown
+                # only when price_digits is 0 and digits also unknown?
+                # Keep explicit 0 (e.g. JPY pairs never 0) — pass through
+                # except None; bridge already maps 0 -> None for price_digits.
+                return d
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _row_dict(asset: AssetSnapshot, prev_price: Optional[float] = None) -> dict:
     up = None
     if asset.change_pct_24h is not None:
@@ -49,6 +67,15 @@ def _row_dict(asset: AssetSnapshot, prev_price: Optional[float] = None) -> dict:
                 direction = -1
         except (TypeError, ValueError):
             direction = 0
+    digits = getattr(asset, "price_digits", None)
+    if digits is None:
+        digits = getattr(asset, "digits", None)
+    try:
+        digits_i = int(digits) if digits is not None else None
+        if digits_i is not None and not (0 <= digits_i <= 10):
+            digits_i = None
+    except (TypeError, ValueError):
+        digits_i = None
     return {
         "key": asset.key,
         "symbol": asset.symbol,
@@ -59,22 +86,34 @@ def _row_dict(asset: AssetSnapshot, prev_price: Optional[float] = None) -> dict:
         "quote": asset.quote,
         "provider": asset.provider,
         "price": asset.price if asset.price is not None else 0.0,
-        "priceText": fmt.number(asset.price),
-        "changeText": fmt.change_text(asset.change_pct_24h),
+        "priceText": fmt.format_price(asset.price, digits=digits_i),
+        "priceDigits": digits_i if digits_i is not None else -1,
+        "change": asset.change_pct_24h,
+        "changeText": fmt.format_percent(asset.change_pct_24h),
         "changeUp": up,
         "direction": direction,
         "feed": _feed_text(asset),
         "connected": asset.connected,
         "stale": asset.stale,
         "messages": asset.messages,
+        "age_s": asset.age_s,
+        "ageText": fmt.age_text(asset.age_s),
+        "spread_bps": asset.spread_bps,
+        "spreadText": fmt.format_spread_bps(asset.spread_bps),
+        "volume": asset.volume_5m if asset.volume_5m is not None else (
+            asset.volume_24h if getattr(asset, "volume_24h", None) is not None else None),
+        "volumeText": (fmt.format_volume(asset.volume_5m)
+                       if asset.volume_5m is not None
+                       else (fmt.format_volume(getattr(asset, "volume_24h", None))
+                             if getattr(asset, "volume_24h", None) is not None else "—")),
+        "liquidity": asset.liquidity_usd,
+        "liquidityText": fmt.format_volume(asset.liquidity_usd),
         "spark": list(asset.price_history[-SPARK_POINTS:]),
         "dex": asset.dex or "",
         "pool": asset.pool or "",
         "favorite": asset.favorite,
         "revision": asset.revision,
         "searchHay": f"{asset.symbol} {asset.name} {asset.mint}".lower(),
-        "scoreText": "—",
-        "alertsText": "—",
     }
 
 
@@ -83,20 +122,33 @@ class AssetListModel(QAbstractListModel):
 
     KeyRole = Qt.UserRole + 1
     _ROLES = ("key", "symbol", "quote", "provider", "price", "priceText",
-              "changeText", "changeUp", "direction", "feed", "connected",
-              "stale", "messages", "spark", "scoreText", "alertsText",
+              "priceDigits", "change", "changeText", "changeUp", "direction",
+              "feed", "connected",
+              "stale", "messages", "age_s", "ageText", "spread_bps",
+              "spreadText", "volume", "volumeText", "liquidity",
+              "liquidityText", "spark",
               "name", "mint", "chain", "venue", "favorite", "revision",
               "dex", "pool", "searchHay")
     countChanged = Signal()
+    sortChanged = Signal()
 
     def __init__(self, parent: Optional[QObject] = None):
         super().__init__(parent)
         self._rows: List[dict] = []
         self._by_key: Dict[str, int] = {}
+        self._sort_field = "symbol"
+        self._sort_asc = True
+        self._sort_active = False
 
     @Property(int, notify=countChanged)
     def count(self):
         return len(self._rows)
+
+    @Property(str, notify=sortChanged)
+    def sortField(self): return self._sort_field
+
+    @Property(bool, notify=sortChanged)
+    def sortAscending(self): return self._sort_asc
 
     def roleNames(self):
         return {self.KeyRole + i: name.encode() for i, name in enumerate(self._ROLES)}
@@ -159,6 +211,8 @@ class AssetListModel(QAbstractListModel):
                 touched[i] = row
         if len(self._rows) != size_before:
             self.countChanged.emit()
+        if self._sort_active:
+            self._apply_sort(silent=False)
         _perf.global_tracker.measure("registry_to_ui", t0,
                                      f"delta {len(touched)}/{len(amap)}")
         return touched
@@ -201,7 +255,43 @@ class AssetListModel(QAbstractListModel):
                 self.endInsertRows()
         if len(self._rows) != before:
             self.countChanged.emit()
+        if self._sort_active:
+            self._apply_sort(silent=False)
         return changed
+
+    @Slot(str, bool)
+    def sortBy(self, field: str, ascending: bool = True):
+        """Local sort (no refetch). Selection + favorites preserved (per-row)."""
+        f = (field or "symbol").lower()
+        allowed = ("symbol", "price", "change", "provider", "freshness",
+                   "volume", "spread")
+        if f not in allowed:
+            f = "symbol"
+        if f == self._sort_field and bool(ascending) == self._sort_asc and self._sort_active:
+            return
+        self._sort_field = f
+        self._sort_asc = bool(ascending)
+        self._sort_active = True
+        self._apply_sort(silent=False)
+        try:
+            self.sortChanged.emit()
+        except Exception:
+            pass
+
+    def _apply_sort(self, silent: bool = False) -> None:
+        if not self._rows:
+            return
+        ordered = fmt.sort_rows(self._rows, self._sort_field, self._sort_asc)
+        if [r["key"] for r in ordered] == [r["key"] for r in self._rows]:
+            return
+        self.layoutAboutToBeChanged.emit()
+        self._rows = ordered
+        self._by_key = {r["key"]: n for n, r in enumerate(self._rows)}
+        self.layoutChanged.emit()
+        # dataChanged for all (views refresh sort-dependent highlighting).
+        if self._rows:
+            self.dataChanged.emit(self.index(0, 0),
+                                  self.index(len(self._rows) - 1, 0))
 
     def clear(self):
         if not self._rows:
@@ -329,6 +419,61 @@ class SelectedAssetVM(QObject):
     def marketCap(self): return self._d.get("marketCap", "—")
 
     @Property(str, notify=changed)
+    def fdv(self): return self._d.get("fdv", "—")
+
+    @Property(str, notify=changed)
+    def volume24h(self): return self._d.get("volume24h", "—")
+
+    @Property(int, notify=changed)
+    def priceDigits(self):
+        try:
+            v = self._d.get("priceDigits", -1)
+            return int(v) if v is not None else -1
+        except (TypeError, ValueError):
+            return -1
+
+    @Property(float, notify=changed)
+    def volumeMin(self):
+        v = self._d.get("volumeMin", None)
+        try:
+            return float(v) if v is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    @Property(float, notify=changed)
+    def volumeMax(self):
+        v = self._d.get("volumeMax", None)
+        try:
+            return float(v) if v is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    @Property(float, notify=changed)
+    def volumeStep(self):
+        v = self._d.get("volumeStep", None)
+        try:
+            return float(v) if v is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    @Property(float, notify=changed)
+    def contractSize(self):
+        v = self._d.get("contractSize", None)
+        try:
+            return float(v) if v is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    @Property(str, notify=changed)
+    def currencyBase(self): return self._d.get("currencyBase", "")
+
+    @Property(str, notify=changed)
+    def currencyProfit(self): return self._d.get("currencyProfit", "")
+
+    @Property(bool, notify=changed)
+    def isMt5(self): return self._d.get("provider", "") == "mt5"
+
+    @Property(str, notify=changed)
     def pool(self): return self._d.get("pool", "—")
 
     @Property(str, notify=changed)
@@ -422,19 +567,34 @@ class SelectedAssetVM(QObject):
             "source": asset.source,
             "feed": _feed_text(asset),
             "live": bool(asset.connected and not asset.stale and asset.messages),
-            "priceText": fmt.number(price),
+            "priceDigits": _digits_of(asset),
+            "volumeMin": getattr(asset, "volume_min", None),
+            "volumeMax": getattr(asset, "volume_max", None),
+            "volumeStep": getattr(asset, "volume_step", None),
+            "contractSize": getattr(asset, "contract_size", None),
+            "currencyBase": getattr(asset, "currency_base", "") or "",
+            "currencyProfit": getattr(asset, "currency_profit", "") or "",
+            "priceText": fmt.format_price(price, digits=_digits_of(asset)),
             "quote": asset.quote,
-            "changeText": fmt.change_text(asset.change_pct_24h),
+            "changeText": fmt.format_percent(asset.change_pct_24h),
             "changeUp": (asset.change_pct_24h or 0) >= 0,
             "hasChange": asset.change_pct_24h is not None,
-            "bid": fmt.number(asset.bid),
-            "ask": fmt.number(asset.ask),
-            "spread": fmt.spread_text(asset.spread_bps),
-            "liquidity": fmt.compact_money(asset.liquidity_usd),
-            "volume": fmt.compact_money(asset.volume_5m),
+            "bid": fmt.format_price(asset.bid, digits=_digits_of(asset)),
+            "ask": fmt.format_price(asset.ask, digits=_digits_of(asset)),
+            "spread": fmt.format_spread_bps(asset.spread_bps),
+            "spreadPrice": fmt.format_spread_price(
+                (asset.ask - asset.bid) if (asset.ask is not None and asset.bid is not None) else None,
+                digits=_digits_of(asset)),
+            "liquidity": fmt.format_volume(asset.liquidity_usd),
+            "volume": (fmt.format_volume(asset.volume_5m)
+                       if asset.volume_5m is not None
+                       else (fmt.format_volume(getattr(asset, "volume_24h", None))
+                             if getattr(asset, "volume_24h", None) is not None else "—")),
+            "volume24h": fmt.format_volume(getattr(asset, "volume_24h", None)),
             "buys": "—" if asset.buys_5m is None else str(asset.buys_5m),
             "sells": "—" if asset.sells_5m is None else str(asset.sells_5m),
-            "marketCap": fmt.compact_money(asset.market_cap_usd),
+            "marketCap": fmt.format_market_cap(asset.market_cap_usd),
+            "fdv": fmt.format_market_cap(getattr(asset, "fdv_usd", None)),
             "pool": asset.pool or "—",
             "dex": asset.dex or "—",
             "age": fmt.age_text(asset.age_s),
@@ -445,14 +605,15 @@ class SelectedAssetVM(QObject):
             d["candleLine"] = "—"
             d["candleState"] = "Candle unavailable for this feed"
         else:
-            d["candleLine"] = (f"O {fmt.number(asset.candle_open)}  "
-                               f"H {fmt.number(asset.candle_high)}  "
-                               f"L {fmt.number(asset.candle_low)}  "
-                               f"C {fmt.number(asset.candle_close)}  "
-                               f"V {fmt.number(asset.candle_volume)}")
+            _dg = _digits_of(asset)
+            d["candleLine"] = (f"O {fmt.format_price(asset.candle_open, digits=_dg)}  "
+                               f"H {fmt.format_price(asset.candle_high, digits=_dg)}  "
+                               f"L {fmt.format_price(asset.candle_low, digits=_dg)}  "
+                               f"C {fmt.format_price(asset.candle_close, digits=_dg)}  "
+                               f"V {fmt.format_quantity(asset.candle_volume)}")
             iv = asset.candle_interval or "—"
             d["candleState"] = (f"{iv} · CLOSED" if asset.candle_closed
-                                else f"{iv} · FORMING — provisional, not history")
+                                else f"{iv} · Live (forming)")
         pending_tf = self._d.get("timeframe")
         if (pending_tf and self._d.get("chartLoading")
                 and asset.active_timeframe
@@ -490,6 +651,7 @@ class HealthVM(QObject):
         self._stale = False
         self._messages = 0
         self._detail = ""
+        self._summary = "Opening live feeds…"
         self._state = "CONNECTING"
         self._was_connected = False
 
@@ -509,6 +671,9 @@ class HealthVM(QObject):
     def detail(self): return self._detail
 
     @Property(str, notify=changed)
+    def summary(self): return self._summary
+
+    @Property(str, notify=changed)
     def state(self): return self._state
 
     def sync(self, snapshot: TerminalSnapshot):
@@ -517,15 +682,22 @@ class HealthVM(QObject):
         messages = sum(a.messages for a in snapshot.assets)
         has_error = any(bool(a.error) or a.state == "ERROR"
                         for a in snapshot.assets)
+        # Bounded provider summary for the top bar (no per-instrument age list).
+        providers = []
+        for a in snapshot.assets:
+            if a.provider not in providers:
+                providers.append(a.provider)
+        summary = fmt.health_summary(providers, connected, stale, max_len=64)
         parts = []
         for a in snapshot.assets:
             label = f"{a.provider}: {_feed_text(a)}"
             if a.error:
                 label += f" · {a.error}"
             parts.append(label)
-        text = " · ".join(parts) if parts else "Opening live feeds…"
-        detail = "  |  ".join(
-            f"{a.symbol}: {fmt.age_text(a.age_s)}" for a in snapshot.assets)
+        text = fmt.bound_text(" · ".join(parts) if parts else "Opening live feeds…", 160)
+        # Per-instrument freshness lives in rows/selected asset; the top-bar
+        # detail is bounded and elided (no endless age list).
+        detail = fmt.bound_text(summary, 64)
         state = fmt.connection_state(
             connected, stale,
             "ERROR" if has_error else ("CONNECTED" if connected else "CONNECTING"),
@@ -533,11 +705,12 @@ class HealthVM(QObject):
             was_connected=self._was_connected)
         if connected:
             self._was_connected = True
-        if (text, connected, stale, messages, detail, state) != (
+        if (text, connected, stale, messages, detail, summary, state) != (
                 self._text, self._connected, self._stale, self._messages,
-                self._detail, self._state):
+                self._detail, self._summary, self._state):
             self._text, self._connected, self._stale = text, connected, stale
             self._messages, self._detail = messages, detail
+            self._summary = summary
             self._state = state
             self.changed.emit()
 
@@ -876,6 +1049,204 @@ class TerminalController(QObject):
             return None
         return getattr(bridge, "_mt5_exec", None)
 
+    def _selected_snapshot(self, canonical_id: str = ""):
+        """Live registry state for preview/validation (None-safe)."""
+        try:
+            bridge = self._bridge
+            if bridge is None:
+                return None, None
+            cid = canonical_id or self.selected.key
+            if not cid:
+                return None, None
+            asset = None
+            try:
+                # Prefer the last synced snapshot row for display consistency.
+                pass
+            except Exception:
+                pass
+            st = bridge.registry.state(cid) if hasattr(bridge, "registry") else None
+            meta = bridge.registry.get(cid) if hasattr(bridge, "registry") else None
+            return st, meta
+        except Exception:
+            return None, None
+
+    @Slot(str, str, result=str)
+    def sortAssets(self, field: str, ascending: bool = True):
+        """Local radar sort (no refetch). Returns "" or error text."""
+        try:
+            self.assets.sortBy(field or "symbol", bool(ascending))
+            return ""
+        except Exception as exc:
+            return str(exc)
+
+    @Slot(str, result="QVariantMap")
+    def mt5SymbolMeta(self, canonical_id: str):
+        """Canonical MT5 metadata for QML (no extra symbol_info calls)."""
+        try:
+            bridge = self._bridge
+            if bridge is None or not hasattr(bridge, "registry"):
+                return {"ok": False}
+            meta = bridge.registry.get(canonical_id or self.selected.key or "")
+            if meta is None:
+                return {"ok": False}
+            return {"ok": True, "digits": meta.digits, "point": meta.point,
+                    "contractSize": meta.contract_size,
+                    "volumeMin": meta.volume_min, "volumeMax": meta.volume_max,
+                    "volumeStep": meta.volume_step,
+                    "currencyBase": meta.currency_base or "",
+                    "currencyProfit": meta.currency_profit or ""}
+        except Exception:
+            return {"ok": False}
+
+    @Slot(str, result=str)
+    def defaultVolumeText(self, canonical_id: str):
+        """Initial volume: persisted value only if valid, else volume_min."""
+        from falcon_terminal import formatting as _fmt
+        try:
+            bridge = self._bridge
+            meta = bridge.registry.get(canonical_id or "") if (
+                bridge is not None and hasattr(bridge, "registry")) else None
+            mn = getattr(meta, "volume_min", None) if meta else None
+            mx = getattr(meta, "volume_max", None) if meta else None
+            st = getattr(meta, "volume_step", None) if meta else None
+            if mn is None:
+                # Fall back to the selected VM (last synced snapshot).
+                mn = self.selected.volumeMin or None
+                mx = self.selected.volumeMax or None
+                st = self.selected.volumeStep or None
+            persisted = getattr(self._store, "mt5_default_volume", 0.01)
+            return _fmt.default_volume_text(persisted, mn, mx, st)
+        except Exception:
+            return "0.01"
+
+    @Slot(str, result=str)
+    def validateVolume(self, text: str):
+        """Inline volume validation for the selected MT5 symbol."""
+        from falcon_terminal import formatting as _fmt
+        mn = self.selected.volumeMin or None
+        mx = self.selected.volumeMax or None
+        st = self.selected.volumeStep or None
+        # When the selected VM has no metadata yet, try the registry.
+        try:
+            if (not mn) and self._bridge is not None and hasattr(self._bridge, "registry"):
+                meta = self._bridge.registry.get(self.selected.key or "")
+                if meta is not None:
+                    mn, mx, st = meta.volume_min, meta.volume_max, meta.volume_step
+        except Exception:
+            pass
+        return _fmt.validate_volume_text(text, mn, mx, st)
+
+    @Slot(str, str, str, result=str)
+    def validateSltp(self, side: str, slText: str, tpText: str):
+        """Inline SL/TP validation vs current market (broker authoritative later)."""
+        from falcon_terminal import formatting as _fmt
+        e1 = _fmt.sltp_text_error(slText, "SL")
+        if e1:
+            return e1
+        e2 = _fmt.sltp_text_error(tpText, "TP")
+        if e2:
+            return e2
+        sl = _fmt.parse_sltp_text(slText)
+        tp = _fmt.parse_sltp_text(tpText)
+        if sl is None and tp is None:
+            return ""
+        # Reference price: live registry price preferred.
+        ref = None
+        try:
+            bridge = self._bridge
+            if bridge is not None and hasattr(bridge, "registry"):
+                st = bridge.registry.state(self.selected.key or "")
+                ref = st.price if st else None
+        except Exception:
+            ref = None
+        return _fmt.validate_sltp_side(side, sl, tp, ref)
+
+    @Slot(str, str, str, str, str, result="QVariantMap")
+    def orderPreviewDetails(self, canonical_id: str, side: str, volumeText: str,
+                            slText: str, tpText: str):
+        """Structured order preview for the confirmation dialog."""
+        from falcon_terminal import formatting as _fmt
+        out: dict = {"ok": False}
+        try:
+            from falcon_terminal.registry import parse_canonical_id
+            parsed = parse_canonical_id(canonical_id)
+            symbol = parsed.get("symbol") or parsed.get("ref", "")
+            server = parsed.get("server") or self.mt5account.server
+        except Exception:
+            symbol, server = (canonical_id or "—"), self.mt5account.server
+        # Market state (bid/ask/price/spread) from the selected VM when it
+        # matches, else from the registry.
+        bid_t = ask_t = price_t = spread_t = "—"
+        bid = ask = ref = None
+        digits = None
+        contract = None
+        vol_min = vol_max = vol_step = None
+        try:
+            if self.selected.key == canonical_id:
+                bid_t, ask_t = self.selected.bid, self.selected.ask
+                price_t = self.selected.price
+                spread_t = self.selected.spread
+                digits = self.selected.priceDigits
+                digits = None if digits == -1 else digits
+                contract = self.selected.contractSize or None
+                vol_min = self.selected.volumeMin or None
+                vol_max = self.selected.volumeMax or None
+                vol_step = self.selected.volumeStep or None
+                try:
+                    bridge = self._bridge
+                    if bridge is not None and hasattr(bridge, "registry"):
+                        st = bridge.registry.state(canonical_id)
+                        if st is not None:
+                            bid, ask, ref = st.bid, st.ask, st.price
+                except Exception:
+                    pass
+            else:
+                try:
+                    bridge = self._bridge
+                    if bridge is not None and hasattr(bridge, "registry"):
+                        st = bridge.registry.state(canonical_id)
+                        meta = bridge.registry.get(canonical_id)
+                        if st is not None:
+                            bid, ask, ref = st.bid, st.ask, st.price
+                        if meta is not None:
+                            digits = meta.digits
+                            contract = meta.contract_size
+                            vol_min, vol_max, vol_step = (
+                                meta.volume_min, meta.volume_max, meta.volume_step)
+                        bid_t = _fmt.format_price(bid, digits=digits)
+                        ask_t = _fmt.format_price(ask, digits=digits)
+                        price_t = _fmt.format_price(ref, digits=digits)
+                        spread_t = _fmt.format_spread_bps(st.spread_bps) if st else "—"
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        side_u = (side or "").upper()
+        exec_price = ask if side_u == "BUY" else (bid if side_u == "SELL" else ref)
+        exec_t = _fmt.format_price(exec_price, digits=digits)
+        vol = _fmt.parse_volume_text(volumeText)
+        vol_err = _fmt.validate_volume_text(volumeText, vol_min, vol_max, vol_step)
+        sl = _fmt.parse_sltp_text(slText)
+        tp = _fmt.parse_sltp_text(tpText)
+        sl_err = _fmt.sltp_text_error(slText, "SL") if str(slText or "").strip() else ""
+        tp_err = _fmt.sltp_text_error(tpText, "TP") if str(tpText or "").strip() else ""
+        side_err = _fmt.validate_sltp_side(side_u, sl, tp, ref)
+        notional_t = _fmt.format_notional(vol, contract, exec_price)
+        out.update({
+            "ok": True, "symbol": symbol, "server": server or "—",
+            "side": side_u, "volumeText": _fmt.format_lots(vol) if vol else "—",
+            "volumeError": vol_err, "slError": sl_err or side_err, "tpError": tp_err,
+            "bidText": bid_t, "askText": ask_t, "priceText": price_t,
+            "execPriceText": exec_t, "spreadText": spread_t,
+            "notionalText": notional_t,
+            "slText": _fmt.format_price(sl, digits=digits) if sl else "—",
+            "tpText": _fmt.format_price(tp, digits=digits) if tp else "—",
+            "slDistance": _fmt.sltp_distance_text(ref, sl, digits=digits),
+            "tpDistance": _fmt.sltp_distance_text(ref, tp, digits=digits),
+            "demo": True,
+        })
+        return out
+
     def _set_mt5_busy(self, busy: bool, error: str = ""):
         self._mt5_busy = busy
         if error:
@@ -887,7 +1258,7 @@ class TerminalController(QObject):
         except Exception:
             pass
 
-    @Slot(str, str, float, float, float, result=str)
+    @Slot(str, str, "QVariant", "QVariant", "QVariant", result=str)
     def openDemoPosition(self, canonical_id, side, volume, sl, tp):
         """Open an MT5 DEMO position. Returns '' on submit, else error text.
 
@@ -895,8 +1266,11 @@ class TerminalController(QObject):
         Requires a DEMO account at submit time AND immediately before send
         (double guard inside the adapter). No automatic execution: QML calls
         this only from the explicit OPEN DEMO POSITION confirmation.
+        Volume/SL/TP accept text or numbers; invalid text is rejected
+        (never silently parsed to zero).
         """
         from execution.mt5_demo import DemoSafetyError, OrderRequest
+        from falcon_terminal import formatting as _fmt
         adapter = self._mt5_exec_adapter()
         if adapter is None:
             err = "MT5 demo execution unavailable (integration disabled)"
@@ -905,9 +1279,9 @@ class TerminalController(QObject):
         if not self.mt5account.executionEnabled:
             # Fail closed on the UI state too; the adapter re-checks anyway.
             state = self.mt5account.state
-            err = ("MT5 REAL ACCOUNT DETECTED — EXECUTION DISABLED"
+            err = ("Real account detected — demo trading disabled"
                    if state == "CONNECTED_REAL_BLOCKED"
-                   else f"MT5 demo execution not enabled ({state})")
+                   else "Demo trading is not enabled — connect an MT5 demo account")
             self._set_mt5_busy(False, err)
             return err
         try:
@@ -917,19 +1291,25 @@ class TerminalController(QObject):
                 raise DemoSafetyError("not an MT5 instrument")
             symbol = parsed.get("symbol") or parsed.get("ref", "")
         except Exception as exc:
-            err = f"invalid MT5 instrument: {exc}"
+            err = f"Invalid MT5 instrument: {exc}"
             self._set_mt5_busy(False, err)
             return err
         if side not in ("BUY", "SELL"):
-            return "order rejected: side must be BUY or SELL"
-        try:
-            vol = float(volume)
-        except (TypeError, ValueError):
-            return "order rejected: invalid volume"
+            return "Order rejected: side must be BUY or SELL"
+        vol = _fmt.parse_volume_text(volume)
+        if vol is None or vol <= 0:
+            return "Order rejected: enter a valid volume (numbers only)"
+        sl_v = _fmt.parse_sltp_text(sl) if str(sl or "").strip() not in ("", "None") else None
+        tp_v = _fmt.parse_sltp_text(tp) if str(tp or "").strip() not in ("", "None") else None
+        # Distinguish "optional empty" from "invalid text": non-empty text
+        # that parses to None is invalid (never silently zero).
+        # (Volume None already rejected above; SL/TP checked per-field below.)
+        for raw, parsed_v, label in ((sl, sl_v, "SL"), (tp, tp_v, "TP")):
+            s = str(raw or "").strip()
+            if s not in ("", "0", "0.0", "None") and parsed_v is None:
+                return f"Order rejected: invalid {label} (must be a positive price)"
         req = OrderRequest(canonical_id=canonical_id, symbol=symbol, side=side,
-                           volume=vol,
-                           sl=float(sl) if sl else None,
-                           tp=float(tp) if tp else None)
+                           volume=vol, sl=sl_v, tp=tp_v)
         # Reference price + age from the selected snapshot (stale rejected).
         ref_price, age = None, None
         try:
@@ -964,7 +1344,13 @@ class TerminalController(QObject):
         if adapter is None:
             return "MT5 demo execution unavailable"
         if not self.mt5account.executionEnabled:
-            return "MT5 REAL ACCOUNT DETECTED — EXECUTION DISABLED"
+            return "Real account detected — demo trading disabled"
+        try:
+            t = int(ticket)
+            if t <= 0:
+                return "Position already closed or unknown ticket"
+        except (TypeError, ValueError):
+            return "Position already closed or unknown ticket"
         self._set_mt5_busy(True)
         import threading as _th
 
@@ -984,21 +1370,38 @@ class TerminalController(QObject):
         _th.Thread(target=_run, name="FalconMT5Close", daemon=True).start()
         return ""
 
-    @Slot(int, float, float, result=str)
+    @Slot(int, "QVariant", "QVariant", result=str)
     def modifyDemoSltp(self, ticket, sl, tp):
+        from falcon_terminal import formatting as _fmt
         adapter = self._mt5_exec_adapter()
         if adapter is None:
             return "MT5 demo execution unavailable"
         if not self.mt5account.executionEnabled:
-            return "MT5 REAL ACCOUNT DETECTED — EXECUTION DISABLED"
+            return "Real account detected — demo trading disabled"
+        try:
+            t = int(ticket)
+            if t <= 0:
+                return "Position already closed or unknown ticket"
+        except (TypeError, ValueError):
+            return "Position already closed or unknown ticket"
+        sl_s = str(sl or "").strip() if not isinstance(sl, (int, float)) else str(sl)
+        tp_s = str(tp or "").strip() if not isinstance(tp, (int, float)) else str(tp)
+        # Empty means "leave unchanged/clear"; non-empty invalid is rejected.
+        sl_v = _fmt.parse_sltp_text(sl) if sl_s not in ("", "None") else None
+        tp_v = _fmt.parse_sltp_text(tp) if tp_s not in ("", "None") else None
+        if sl_s not in ("", "None", "0", "0.0") and sl_v is None and sl_s:
+            # Allow explicit "0"/empty to clear; otherwise invalid text rejected.
+            if str(sl).strip() not in ("", "0", "0.0"):
+                return "Invalid SL (must be a positive price)"
+        if tp_s not in ("", "None", "0", "0.0") and tp_v is None and tp_s:
+            if str(tp).strip() not in ("", "0", "0.0"):
+                return "Invalid TP (must be a positive price)"
         self._set_mt5_busy(True)
         import threading as _th
 
-        def _run():
+        def _run(sl_v=sl_v, tp_v=tp_v):
             try:
-                adapter.modify_sltp(int(ticket),
-                                    float(sl) if sl else None,
-                                    float(tp) if tp else None)
+                adapter.modify_sltp(int(ticket), sl_v, tp_v)
                 self._mt5_last_error = ""
             except Exception as exc:
                 self._mt5_last_error = str(exc)

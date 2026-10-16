@@ -358,6 +358,17 @@ class TerminalBridge:
             messages=st.messages if st else 0,
             error=self._errors.get(cid),
             source=st.source if st else "",
+            price_digits=(asset.digits if asset is not None
+                          and asset.digits not in (None, 0) else None),
+            digits=(asset.digits if asset is not None else None),
+            point=(asset.point if asset is not None else None),
+            contract_size=(asset.contract_size if asset is not None else None),
+            volume_min=(asset.volume_min if asset is not None else None),
+            volume_max=(asset.volume_max if asset is not None else None),
+            volume_step=(asset.volume_step if asset is not None else None),
+            currency_base=(asset.currency_base if asset is not None else ""),
+            currency_profit=(asset.currency_profit if asset is not None else ""),
+            volume_24h=(st.volume_24h if st else None),
             candle_open=st.candle_open if st else None,
             candle_high=st.candle_high if st else None,
             candle_low=st.candle_low if st else None,
@@ -549,14 +560,42 @@ class TerminalBridge:
                 if not sym:
                     continue
                 cid = _mt5_id(server, sym)
-                desc = getattr(meta, "description", "") if not isinstance(meta, dict) else meta.get("description", "")
-                base = getattr(meta, "currency_base", "") if not isinstance(meta, dict) else meta.get("currency_base", "")
-                profit = getattr(meta, "currency_profit", "") if not isinstance(meta, dict) else meta.get("currency_profit", "")
+                def _mg(name, default=None):
+                    try:
+                        v = getattr(meta, name) if not isinstance(meta, dict) else meta.get(name, default)
+                    except Exception:
+                        return default
+                    return default if v is None else v
+                desc = _mg("description", "")
+                base = _mg("currency_base", "")
+                profit = _mg("currency_profit", "")
                 self._registry.register(CanonicalAsset(
                     id=cid, provider="mt5", venue=server, chain="",
                     symbol=str(sym), name=str(desc or ""), mint=None,
-                    quote=str(profit or base or ""), supported=TIMEFRAMES),
+                    quote=str(profit or base or ""), supported=TIMEFRAMES,
+                    digits=_mg("digits", None),
+                    point=_mg("point", None),
+                    contract_size=_mg("contract_size", None),
+                    volume_min=_mg("volume_min", None),
+                    volume_max=_mg("volume_max", None),
+                    volume_step=_mg("volume_step", None),
+                    currency_base=str(base or ""),
+                    currency_profit=str(profit or "")),
                     strict=False)
+                # Re-apply metadata on refresh (broker authoritative).
+                try:
+                    self._registry.enrich_identity(
+                        cid,
+                        digits=_mg("digits", None),
+                        point=_mg("point", None),
+                        contract_size=_mg("contract_size", None),
+                        volume_min=_mg("volume_min", None),
+                        volume_max=_mg("volume_max", None),
+                        volume_step=_mg("volume_step", None),
+                        currency_base=str(base or "") or None,
+                        currency_profit=str(profit or "") or None)
+                except Exception:
+                    pass
                 self._registry.apply_health(cid, source=f"MT5 - {server}")
             except Exception:
                 continue
@@ -617,7 +656,9 @@ class TerminalBridge:
         self._mt5_account = _MT5Acc(state=snap.state, server=snap.server, login=snap.login,
             mode_name=snap.mode_name, demo=snap.demo, execution_enabled=snap.execution_enabled,
             message=snap.message, balance=snap.balance, equity=snap.equity,
-            margin=snap.margin, margin_free=snap.margin_free, profit=snap.profit)
+            margin=snap.margin, margin_free=snap.margin_free, profit=snap.profit,
+            margin_level=getattr(snap, "margin_level", None),
+            currency=str(getattr(snap, "currency", "") or ""))
         exec_ad = self._mt5_exec
         if exec_ad is None:
             self._mt5_positions = ()
@@ -627,11 +668,48 @@ class TerminalBridge:
         except Exception as e:
             logger.debug("mt5 positions sync: %s", e)
             return
+        # Symbol metadata for precise position display (digits/contract).
+        meta_by_sym = {}
+        try:
+            for m in (getattr(self._mt5_provider, "symbols", []) or []):
+                try:
+                    s = getattr(m, "symbol", "") if not isinstance(m, dict) else m.get("symbol", "")
+                    if not s:
+                        continue
+                    def _mg2(obj, name):
+                        try:
+                            v = getattr(obj, name) if not isinstance(obj, dict) else obj.get(name)
+                        except Exception:
+                            return None
+                        return v
+                    meta_by_sym[str(s)] = {
+                        "digits": _mg2(m, "digits"),
+                        "point": _mg2(m, "point"),
+                        "contract_size": _mg2(m, "contract_size"),
+                    }
+                except Exception:
+                    continue
+        except Exception:
+            meta_by_sym = {}
+        # Fall back to registry metadata when provider list is unavailable.
         out = []
         for p in positions or []:
             try:
+                _sym = str(getattr(p, "symbol", "") or "")
+                _meta = meta_by_sym.get(_sym, {})
+                if not _meta:
+                    try:
+                        from falcon_terminal.registry import mt5_id as _mid
+                        _srv = getattr(self._mt5_provider, "server_actual", "") or getattr(self._mt5_provider, "server", "") or ""
+                        _cid = _mid(_srv or "unknown", _sym) if _sym else None
+                        _asset = self._registry.get(_cid) if _cid else None
+                        if _asset is not None:
+                            _meta = {"digits": _asset.digits, "point": _asset.point,
+                                     "contract_size": _asset.contract_size}
+                    except Exception:
+                        _meta = {}
                 out.append(_MT5Pos(ticket=int(getattr(p, "ticket", 0) or 0),
-                    symbol=str(getattr(p, "symbol", "") or ""),
+                    symbol=_sym,
                     canonical_id=str(getattr(p, "canonical_id", "") or ""),
                     side=str(getattr(p, "side", "") or ""),
                     volume=float(getattr(p, "volume", 0) or 0),
@@ -640,7 +718,9 @@ class TerminalBridge:
                     sl=getattr(p, "sl", None), tp=getattr(p, "tp", None),
                     profit=getattr(p, "profit", None), swap=getattr(p, "swap", None),
                     comment=str(getattr(p, "comment", "") or ""),
-                    open_time=getattr(p, "open_time", None)))
+                    open_time=getattr(p, "open_time", None),
+                    digits=_meta.get("digits"), point=_meta.get("point"),
+                    contract_size=_meta.get("contract_size")))
             except Exception:
                 continue
         before = {p.ticket for p in self._mt5_positions} if self._mt5_positions else set()
