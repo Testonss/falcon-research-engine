@@ -106,10 +106,26 @@ class RuntimeDemoExecutor:
                                              tick_age_s=tick_age_s)
         except DemoSafetyError as e:
             logger.warning("DEMO execution blocked (%s): %s", decision.decision_id, e)
+            if self.store is not None:
+                try:
+                    self.store.record_attempt(
+                        decision.decision_id, decision.symbol, decision.action,
+                        decision.volume, decision.price, "rejected",
+                        ticket=0, error=str(e))
+                except Exception:
+                    pass
             return DemoExecResult(sent=False, skipped=True,
                                   reason="safety_block", error=str(e))
         except Exception as e:  # fail closed, never half-mark
             logger.error("DEMO execution failed (%s): %s", decision.decision_id, e)
+            if self.store is not None:
+                try:
+                    self.store.record_attempt(
+                        decision.decision_id, decision.symbol, decision.action,
+                        decision.volume, decision.price, "error",
+                        ticket=0, error=str(e))
+                except Exception:
+                    pass
             return DemoExecResult(sent=False, skipped=True,
                                   reason="error", error=str(e))
         ticket = int(out.get("ticket", 0) or 0)
@@ -119,6 +135,24 @@ class RuntimeDemoExecutor:
             self.store.record_fill(decision.decision_id, ticket, decision.symbol,
                                    decision.action, decision.volume,
                                    float(out.get("price", decision.price) or decision.price))
+            try:
+                self.store.record_attempt(
+                    decision.decision_id, decision.symbol, decision.action,
+                    decision.volume, decision.price, "accepted",
+                    ticket=ticket, error="")
+            except Exception:
+                pass
+            try:
+                self.store.upsert_position(
+                    ticket, decision.symbol, decision.action,
+                    decision.volume, float(out.get("price", decision.price)
+                                           or decision.price),
+                    stop_loss=float(decision.stop_loss or 0.0),
+                    take_profit=float(decision.take_profit or 0.0),
+                    origin_decision_id=decision.decision_id,
+                    origin_signal_id=decision.decision_id, status="OPEN")
+            except Exception:
+                pass
         logger.info("DEMO auto order %s %s vol=%s ticket=%s",
                     decision.symbol, decision.action, decision.volume, ticket)
         return DemoExecResult(sent=True, ticket=ticket, reason="sent")
@@ -135,6 +169,58 @@ class RuntimeDemoExecutor:
             return self.adapter.account_snapshot()
         except Exception as e:
             return {"error": str(e)}
+
+    def close(self, ticket: int, reason: str = "") -> Dict[str, Any]:
+        """DEMO-only close by ticket. Fail-closed; never raises for control flow.
+
+        When the ticket is already absent from the terminal (broker SL/TP or
+        manual close), reports ``already_closed=True`` so the caller
+        reconciles instead of sending another close.
+        """
+        try:
+            still_open = False
+            for p in self.open_positions():
+                try:
+                    t = getattr(p, "ticket", None)
+                    if t is None and isinstance(p, dict):
+                        t = p.get("ticket")
+                    if int(t or -1) == int(ticket):
+                        still_open = True
+                        break
+                except (TypeError, ValueError):
+                    continue
+            if not still_open:
+                return {"closed": False, "already_closed": True,
+                        "ticket": int(ticket), "reason": reason or "not_on_terminal"}
+        except Exception:
+            pass
+        if self.dry_run:
+            if self.store is not None:
+                try:
+                    self.store.mark_position_closed(int(ticket), reason or "exit:dry_run")
+                except Exception:
+                    pass
+            return {"closed": True, "dry_run": True, "ticket": int(ticket),
+                    "reason": reason or "exit:dry_run"}
+        try:
+            out = self.adapter.close_position(int(ticket))
+        except Exception as e:
+            msg = str(e)
+            if "no longer exists" in msg:
+                return {"closed": False, "already_closed": True,
+                        "ticket": int(ticket), "reason": reason or "not_on_terminal",
+                        "error": msg}
+            return {"closed": False, "ticket": int(ticket),
+                    "reason": reason or "exit", "error": msg}
+        if self.store is not None:
+            try:
+                self.store.mark_position_closed(int(ticket), reason or "exit")
+            except Exception:
+                pass
+        out = dict(out or {})
+        out.setdefault("ticket", int(ticket))
+        out.setdefault("reason", reason or "exit")
+        return out
 
 
 def build_adapter_for_config(mt5_module: Any, server: str = "",

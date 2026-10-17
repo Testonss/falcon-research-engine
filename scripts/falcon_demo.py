@@ -131,8 +131,11 @@ def cmd_status(args):
 def cmd_pause(args):
     store = RuntimeStore(args.state_db)
     try:
-        store.set_paused(True, args.reason or "operator")
-        print(f"paused ({args.reason or 'operator'})")
+        mode = str(getattr(args, "mode", "") or "NEW_ENTRIES").upper()
+        if mode not in ("NEW_ENTRIES", "ALL"):
+            mode = "NEW_ENTRIES"
+        store.set_pause_mode(mode, getattr(args, "reason", "") or "operator")
+        print(f"paused mode={mode} ({getattr(args, 'reason', '') or 'operator'})")
     finally:
         store.close()
     return 0
@@ -141,8 +144,64 @@ def cmd_pause(args):
 def cmd_resume(args):
     store = RuntimeStore(args.state_db)
     try:
-        store.set_paused(False)
+        store.set_pause_mode("NONE", "")
         print("resumed")
+    finally:
+        store.close()
+    return 0
+
+
+def cmd_positions(args):
+    store = RuntimeStore(args.state_db)
+    try:
+        open_pos = store.list_positions(status="OPEN", limit=500)
+        closed = store.list_closed_trades(limit=int(getattr(args, "limit", 50) or 50))
+        print(f"open={len(open_pos)} closed_tracked={len(closed)}")
+        for p in open_pos[: int(getattr(args, "limit", 50) or 50)]:
+            print(f"  ticket={p.get('ticket')} {p.get('symbol')} {p.get('side')} "
+                  f"vol={p.get('volume')} entry={p.get('entry_price')} "
+                  f"origin={p.get('origin_decision_id')}")
+        for t in closed[:5]:
+            print(f"  closed ticket={t.get('ticket')} {t.get('symbol')} "
+                  f"reason={t.get('exit_reason')} pnl={t.get('realized_pnl')}")
+    finally:
+        store.close()
+    return 0
+
+
+def cmd_decisions(args):
+    store = RuntimeStore(args.state_db)
+    try:
+        counts = store.decision_counts()
+        print(f"decisions={counts}")
+        ev = store.event_counts()
+        print(f"events={ev}")
+        for e in store.list_events(limit=int(getattr(args, "limit", 50) or 50)):
+            print(f"  {e.get('type')} dec={e.get('decision_id')} "
+                  f"ticket={e.get('ticket')} sym={e.get('symbol')}")
+    finally:
+        store.close()
+    return 0
+
+
+def cmd_health(args):
+    from runtime.metrics import RuntimeMetrics
+    store = RuntimeStore(args.state_db)
+    try:
+        snap = health_snapshot(store)
+        m = RuntimeMetrics(store).snapshot()
+        print(f"run_id={snap.get('run_id') or '-'} "
+              f"cycle={snap.get('cycle') or '0'} "
+              f"state={snap.get('runtime_state') or '-'} "
+              f"pause_mode={snap.get('pause_mode')} "
+              f"open={snap.get('open_positions')} closed={snap.get('closed_trades')}")
+        print(f"metrics uptime_s={m.get('uptime_s')} signals={m.get('signals')} "
+              f"rejects={m.get('risk_rejects')} attempted={m.get('orders_attempted')} "
+              f"accepted={m.get('orders_accepted')} opened={m.get('positions_opened')} "
+              f"closed={m.get('positions_closed')} wins={m.get('wins')} "
+              f"losses={m.get('losses')} pnl={m.get('realized_pnl')} "
+              f"reconnects={m.get('reconnect_count')} stale={m.get('stale_feed_count')}")
+        # No profitability claims: raw counters only.
     finally:
         store.close()
     return 0
@@ -202,21 +261,35 @@ def _synthetic_bars(symbol, n=120, start=1.1000):
 
 
 def cmd_soak(args):
-    cm, rcfg, risk, store, executor = build_stack(args)
-    rcfg.dry_run = True
-    executor.dry_run = True
-    symbols = [s.strip() for s in (args.symbols or "EURUSD").split(",") if s.strip()]
-    rcfg.symbols = symbols
-    bars = {s: _synthetic_bars(s, n=int(args.bars)) for s in symbols}
-    rt = AutonomousDemoRuntime(rcfg, store, executor, risk_manager=risk,
-                               bars_provider=bars, accelerated=True)
-    try:
-        out = asyncio.run(rt.run(max_cycles=int(args.cycles)))
-    finally:
-        store.close()
-    print(f"falcon-demo soak: cycles={out['cycles']} sent={out['sent']} "
+    """Accelerated deterministic soak (no MT5, dry_run).
+
+    Default covers >= 7 trading days: --days 7 with --bars-per-day 288
+    (5m bars) and --cycles spanning the whole window. The scenario mixes
+    trends, ranges, no-signal gaps, risk rejects, market-closed and stale
+    windows, plus a mid-soak disconnect/reconnect and restart.
+    """
+    from runtime.soak import run_7d_soak
+    days = int(getattr(args, "days", 7) or 7)
+    bars_per_day = int(getattr(args, "bars_per_day", 0) or 0)
+    if bars_per_day <= 0:
+        bars_per_day = max(50, int(getattr(args, "bars", 120) or 120))
+    cycles = int(getattr(args, "cycles", 0) or 0)
+    symbols = [s.strip() for s in (getattr(args, "symbols", "") or "EURUSD").split(",") if s.strip()]
+    report = run_7d_soak(
+        state_db=getattr(args, "state_db", "runtime_demo_soak.db"),
+        symbols=symbols, days=days, bars_per_day=bars_per_day,
+        cycles=cycles or None,
+        server=getattr(args, "server", "") or "")
+    print(f"falcon-demo soak7d: days={report['days']} "
+          f"cycles={report['cycles']} bars={report['bars']} "
+          f"signals={report['signals']} orders={report['orders']} "
+          f"rejects={report['rejects']} positions={report['positions']} "
+          f"restarts={report['restarts']} reconnects={report['reconnects']} "
+          f"duplicates={report['duplicates']} "
           f"(dry_run, deterministic, no broker)")
-    return 0
+    for w in report.get("warnings", []):
+        print(f"  warning: {w}")
+    return 0 if report["duplicates"] == 0 else 1
 
 
 def main(argv=None):
@@ -242,11 +315,28 @@ def main(argv=None):
     p = sub.add_parser("pause", help="pause trading (heartbeats continue)")
     p.add_argument("--state-db", default="runtime_demo.db")
     p.add_argument("--reason", default="operator")
+    p.add_argument("--mode", default="NEW_ENTRIES",
+                   choices=["NEW_ENTRIES", "ALL"],
+                   help="NEW_ENTRIES=pause entries only; ALL=pause all strategy actions")
     p.set_defaults(fn=cmd_pause)
 
     rs = sub.add_parser("resume", help="resume trading")
     rs.add_argument("--state-db", default="runtime_demo.db")
     rs.set_defaults(fn=cmd_resume)
+
+    ps = sub.add_parser("positions", help="open/closed tracked positions")
+    ps.add_argument("--state-db", default="runtime_demo.db")
+    ps.add_argument("--limit", type=int, default=50)
+    ps.set_defaults(fn=cmd_positions)
+
+    dc = sub.add_parser("decisions", help="decision/event counters + tail")
+    dc.add_argument("--state-db", default="runtime_demo.db")
+    dc.add_argument("--limit", type=int, default=50)
+    dc.set_defaults(fn=cmd_decisions)
+
+    hh = sub.add_parser("health", help="runtime metrics snapshot (no profit claims)")
+    hh.add_argument("--state-db", default="runtime_demo.db")
+    hh.set_defaults(fn=cmd_health)
 
     rc = sub.add_parser("reconcile", help="one-shot position reconciliation")
     rc.add_argument("--state-db", default="runtime_demo.db")
@@ -255,8 +345,12 @@ def main(argv=None):
 
     sk = sub.add_parser("soak", help="accelerated deterministic soak (no MT5)")
     sk.add_argument("--symbols", default="EURUSD")
-    sk.add_argument("--cycles", type=int, default=50)
-    sk.add_argument("--bars", type=int, default=120)
+    sk.add_argument("--cycles", type=int, default=0,
+                    help="0 = auto (covers --days window)")
+    sk.add_argument("--bars", type=int, default=120,
+                    help="legacy: bars per symbol when --bars-per-day unset")
+    sk.add_argument("--bars-per-day", type=int, default=288)
+    sk.add_argument("--days", type=int, default=7)
     sk.add_argument("--state-db", default="runtime_demo_soak.db")
     sk.add_argument("--server", default="")
     sk.set_defaults(fn=cmd_soak)

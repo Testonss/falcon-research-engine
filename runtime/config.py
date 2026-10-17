@@ -47,6 +47,29 @@ class RuntimeConfig:
     max_position_size: float = 1.0
     max_daily_loss: float = 500.0
     stale_after_s: float = 30.0
+    # --- v0.2 acceptance closure: full risk engine knobs -----------------
+    max_total_lots: float = 5.0
+    max_exposure_per_symbol: float = 100000.0  # quote-notional cap per symbol
+    max_total_exposure: float = 200000.0       # quote-notional cap portfolio
+    max_daily_drawdown_pct: float = 0.05       # intraday peak->trough halt
+    max_drawdown_pct: float = 0.10             # session max drawdown halt
+    max_consecutive_losses: int = 3
+    cooldown_between_trades_s: float = 0.0     # min seconds between entries
+    stop_trading_cooldown_minutes: int = 30
+    max_trades_per_symbol: int = 10            # per rolling window
+    trades_window_s: float = 3600.0            # rolling window seconds
+    max_spread_pct: float = 0.002              # 0.2% default
+    max_spread_absolute: float = 0.0           # price units; 0 = pct only
+    min_history_bars: int = 0                  # 0 = derived from indicators
+    trading_day_tz: str = "UTC"                # trading-day identity tz
+    # --- exit engine ------------------------------------------------------
+    signal_expiry_bars: int = 20               # signal stale after N bars
+    time_stop_bars: int = 100                  # flat time stop after N bars
+    # --- market-closed backoff -------------------------------------------
+    market_closed_backoff_s: float = 60.0      # initial cooldown
+    market_closed_max_backoff_s: float = 3600.0
+    # --- kill switch / pause ----------------------------------------------
+    pause_mode_default: str = "NONE"           # NONE | NEW_ENTRIES | ALL
 
     @classmethod
     def from_env(cls, base: "RuntimeConfig | None" = None) -> "RuntimeConfig":
@@ -98,6 +121,28 @@ class RuntimeConfig:
             cfg.risk_per_trade_pct = float(cm.get("risk_per_trade_pct", cfg.risk_per_trade_pct))
             cfg.max_position_size = float(cm.get("max_position_size", cfg.max_position_size))
             cfg.max_daily_loss = float(cm.get("max_daily_loss", cfg.max_daily_loss))
+            # Optional overlays when present in shared config.
+            for _k in ("max_total_lots", "max_exposure_per_symbol",
+                       "max_total_exposure", "max_daily_drawdown_pct",
+                       "max_drawdown_pct", "max_consecutive_losses",
+                       "cooldown_between_trades_s",
+                       "stop_trading_cooldown_minutes",
+                       "max_trades_per_symbol", "trades_window_s",
+                       "max_spread_pct", "max_spread_absolute",
+                       "min_history_bars", "trading_day_tz",
+                       "signal_expiry_bars", "time_stop_bars",
+                       "market_closed_backoff_s",
+                       "market_closed_max_backoff_s"):
+                try:
+                    _v = cm.get(_k, None)
+                except Exception:
+                    _v = None
+                if _v is not None:
+                    try:
+                        setattr(cfg, _k, type(getattr(cfg, _k))(_v)
+                                if not isinstance(getattr(cfg, _k), str) else str(_v))
+                    except (TypeError, ValueError):
+                        pass
         except (TypeError, ValueError):
             pass
         return cls.from_env(cfg)

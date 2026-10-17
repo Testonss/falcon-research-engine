@@ -26,6 +26,23 @@ def health_snapshot(store: RuntimeStore, extra: Optional[Dict[str, Any]] = None)
         "decisions": store.decision_counts(),
         "last_heartbeat": hb,
     }
+    try:
+        snap["pause_mode"] = store.get_pause_mode()
+    except Exception:
+        snap["pause_mode"] = "NONE" if not snap["paused"] else "NEW_ENTRIES"
+    try:
+        snap["runtime_state"] = store.get_meta("runtime_state", "")
+    except Exception:
+        snap["runtime_state"] = ""
+    try:
+        snap["events"] = store.event_counts()
+    except Exception:
+        snap["events"] = {}
+    try:
+        snap["open_positions"] = len(store.list_positions(status="OPEN", limit=5000))
+        snap["closed_trades"] = len(store.list_closed_trades(limit=5000))
+    except Exception:
+        pass
     if extra:
         snap.update(extra)
     return snap
